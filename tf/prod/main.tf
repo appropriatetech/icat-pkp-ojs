@@ -1,20 +1,52 @@
 locals {
   project_id = "inat-359418"
   region     = "us-central1"
+
+  pkp_ojs_env_vars = {
+    PKP_TOOL               = "ojs"
+    PKP_VERSION            = "3_3_0-21"
+    WEB_SERVER             = "php:8.2-apache"
+    COMPOSE_PROJECT_NAME   = "ojs"
+    PROJECT_DOMAIN         = "conference-submissions.appropriatetech.net"
+    SERVERNAME             = "conference-submissions.appropriatetech.net"
+    WEB_USER               = "www-data"
+    WEB_PATH               = "/var/www/html"
+    PKP_CLI_INSTALL        = "0"
+    PKP_DB_HOST            = google_sql_database_instance.pkp_ojs.private_ip_address
+    PKP_DB_NAME            = google_sql_database.icat.name
+    PKP_WEB_CONF           = "/etc/apache2/conf-enabled/pkp.conf"
+    PKP_CONF               = "/var/www/html/config.inc.php"
+    BUILD_PKP_APP_OS       = "alpine:3.22"
+    BUILD_PKP_APP_PATH     = "/app"
+  }
+
+  pkp_ojs_env_secret_ids = {
+    PKP_DB_USER     = google_secret_manager_secret.pkp_db_user.secret_id
+    PKP_DB_PASSWORD = google_secret_manager_secret.pkp_db_password.secret_id
+  }
+
+  pkp_ojs_env_secret_values = {
+    PKP_DB_USER     = google_secret_manager_secret_version.pkp_db_user.secret_data
+    PKP_DB_PASSWORD = google_secret_manager_secret_version.pkp_db_password.secret_data
+  }
 }
 
 resource "google_artifact_registry_repository" "cloud_run_source_deploy" {
-  description = "Cloud Run Source Deployments"
-  format      = "DOCKER"
-  labels = {
-    managed-by-cnrm = "true"
-  }
+  description   = "Cloud Run Source Deployments"
+  format        = "DOCKER"
   location      = local.region
   mode          = "STANDARD_REPOSITORY"
   project       = local.project_id
   repository_id = "cloud-run-source-deploy"
 }
 # terraform import google_artifact_registry_repository.cloud_run_source_deploy projects/inat-359418/locations/us-central1/repositories/cloud-run-source-deploy
+
+resource "google_sql_database" "icat" {
+  instance = google_sql_database_instance.pkp_ojs.name
+  name     = "icat"
+  project  = local.project_id
+}
+# terraform import google_sql_database.icat inat-359418/pkp-ojs/icat
 
 resource "google_sql_database_instance" "pkp_ojs" {
   database_version    = "MYSQL_8_4"
@@ -37,6 +69,10 @@ resource "google_sql_database_instance" "pkp_ojs" {
       start_time                     = "06:00"
       transaction_log_retention_days = 7
     }
+    final_backup_config {
+      enabled        = true
+      retention_days = 30
+    }
     connector_enforcement       = "NOT_REQUIRED"
     deletion_protection_enabled = true
     disk_autoresize             = true
@@ -44,9 +80,7 @@ resource "google_sql_database_instance" "pkp_ojs" {
     disk_size                   = 10
     disk_type                   = "PD_SSD"
     edition                     = "ENTERPRISE"
-    insights_config {
-      query_string_length = 0
-    }
+
     ip_configuration {
       ipv4_enabled    = false
       private_network = "projects/inat-359418/global/networks/default"
@@ -63,11 +97,9 @@ resource "google_sql_database_instance" "pkp_ojs" {
       enable_password_policy      = true
       min_length                  = 8
     }
-    pricing_plan = "PER_USE"
-    tier         = "db-g1-small"
-    user_labels = {
-      managed-by-cnrm = "true"
-    }
+    pricing_plan             = "PER_USE"
+    tier                     = "db-g1-small"
+    retain_backups_on_delete = true
   }
 }
 # terraform import google_sql_database_instance.pkp_ojs projects/inat-359418/instances/pkp-ojs
@@ -76,85 +108,46 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs" {
   client         = "gcloud"
   client_version = "531.0.0"
   ingress        = "INGRESS_TRAFFIC_ALL"
-  labels = {
-    managed-by-cnrm = "true"
+  launch_stage   = "GA"
+  location       = local.region
+  name           = "icat-pkp-ojs"
+  project        = local.project_id
+  build_config {
+    enable_automatic_updates = false
+    environment_variables = merge({
+      for k, v in local.pkp_ojs_env_vars :
+      k => v
+    }, {
+      for k, v in local.pkp_ojs_env_secret_values :
+      k => v
+    })
+    image_uri       = "us-central1-docker.pkg.dev/inat-359418/cloud-run-source-deploy/icat-pkp-ojs"
+    service_account = google_service_account.pkp_ojs_sa.id
+    source_location = "gs://run-sources-inat-359418-us-central1/services/icat-pkp-ojs/1757956567.426021-a003ea97231f4cd2afd2f9513c6a6b79.zip#1757956567585535"
   }
-  launch_stage = "GA"
-  location     = local.region
-  name         = "icat-pkp-ojs"
-  project      = local.project_id
   template {
     containers {
-      env {
-        name  = "PKP_TOOL"
-        value = "ojs"
+      dynamic "env" {
+        for_each = local.pkp_ojs_env_vars
+        content {
+          name  = env.key
+          value = env.value
+        }
       }
-      env {
-        name  = "PKP_VERSION"
-        value = "3_3_0-21"
+
+      dynamic "env" {
+        for_each = local.pkp_ojs_env_secret_ids
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = env.value
+              version = "latest"
+            }
+          }
+        }
       }
-      env {
-        name  = "WEB_SERVER"
-        value = "php:8.2-apache"
-      }
-      env {
-        name  = "COMPOSE_PROJECT_NAME"
-        value = "ojs"
-      }
-      env {
-        name  = "PROJECT_DOMAIN"
-        value = "conference-submissions.appropriatetech.net"
-      }
-      env {
-        name  = "SERVERNAME"
-        value = "conference-submissions.appropriatetech.net"
-      }
-      env {
-        name  = "WEB_USER"
-        value = "www-data"
-      }
-      env {
-        name  = "WEB_PATH"
-        value = "/var/www/html"
-      }
-      env {
-        name  = "PKP_CLI_INSTALL"
-        value = "0"
-      }
-      env {
-        name  = "PKP_DB_HOST"
-        # value = "10.79.192.3"
-        value = google_sql_database_instance.pkp_ojs.private_ip_address
-      }
-      env {
-        name  = "PKP_DB_NAME"
-        # value = "icat"
-        value = google_sql_database_instance.pkp_ojs.name
-      }
-      env {
-        name  = "PKP_DB_USER"
-        value = "icat"
-      }
-      env {
-        name  = "PKP_DB_PASSWORD"
-        value = "xxx"
-      }
-      env {
-        name  = "PKP_WEB_CONF"
-        value = "/etc/apache2/conf-enabled/pkp.conf"
-      }
-      env {
-        name  = "PKP_CONF"
-        value = "/var/www/html/config.inc.php"
-      }
-      env {
-        name  = "BUILD_PKP_APP_OS"
-        value = "alpine:3.22"
-      }
-      env {
-        name  = "BUILD_PKP_APP_PATH"
-        value = "/app"
-      }
+
       image = "us-central1-docker.pkg.dev/inat-359418/cloud-run-source-deploy/icat-pkp-ojs:latest"
       name  = "icat-pkp-ojs-1"
       ports {
@@ -203,19 +196,50 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs" {
     scaling {
       max_instance_count = 10
     }
-    service_account = "809701600064-compute@developer.gserviceaccount.com"
-    timeout         = "300s"
+    timeout = "300s"
     volumes {
       name = "public-files"
+      gcs {
+        bucket = google_storage_bucket.icat_pkp_ojs_public.name
+        mount_options = [
+          "uid=33",
+          "gid=33",
+        ]
+        read_only = false
+      }
     }
     volumes {
       name = "private-files"
+      gcs {
+        bucket = google_storage_bucket.icat_pkp_ojs_private.name
+        mount_options = [
+          "uid=33",
+          "gid=33",
+        ]
+        read_only = false
+      }
     }
     volumes {
       name = "log-files"
+      gcs {
+        bucket = google_storage_bucket.icat_pkp_ojs_logs.name
+        mount_options = [
+          "uid=33",
+          "gid=33",
+        ]
+        read_only = false
+      }
     }
     volumes {
       name = "config-files"
+      gcs {
+        bucket = google_storage_bucket.icat_pkp_ojs_config.name
+        mount_options = [
+          "uid=33",
+          "gid=33",
+        ]
+        read_only = false
+      }
     }
     volumes {
       cloud_sql_instance {
@@ -238,10 +262,7 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs" {
 # terraform import google_cloud_run_v2_service.icat_pkp_ojs projects/inat-359418/locations/us-central1/services/icat-pkp-ojs
 
 resource "google_storage_bucket" "icat_pkp_ojs_config" {
-  force_destroy = false
-  labels = {
-    managed-by-cnrm = "true"
-  }
+  force_destroy            = false
   location                 = local.region
   name                     = "icat-pkp-ojs-config"
   project                  = local.project_id
@@ -254,10 +275,7 @@ resource "google_storage_bucket" "icat_pkp_ojs_config" {
 # terraform import google_storage_bucket.icat_pkp_ojs_config icat-pkp-ojs-config
 
 resource "google_storage_bucket" "icat_pkp_ojs_private" {
-  force_destroy = false
-  labels = {
-    managed-by-cnrm = "true"
-  }
+  force_destroy            = false
   location                 = local.region
   name                     = "icat-pkp-ojs-private"
   project                  = local.project_id
@@ -278,10 +296,7 @@ resource "google_service_account" "pkp_ojs_sa" {
 # terraform import google_service_account.pkp_ojs_sa projects/inat-359418/serviceAccounts/pkp-ojs-sa@inat-359418.iam.gserviceaccount.com
 
 resource "google_storage_bucket" "icat_pkp_ojs_logs" {
-  force_destroy = false
-  labels = {
-    managed-by-cnrm = "true"
-  }
+  force_destroy            = false
   location                 = local.region
   name                     = "icat-pkp-ojs-logs"
   project                  = local.project_id
@@ -294,10 +309,7 @@ resource "google_storage_bucket" "icat_pkp_ojs_logs" {
 # terraform import google_storage_bucket.icat_pkp_ojs_logs icat-pkp-ojs-logs
 
 resource "google_storage_bucket" "icat_pkp_ojs_public" {
-  force_destroy = false
-  labels = {
-    managed-by-cnrm = "true"
-  }
+  force_destroy            = false
   location                 = local.region
   name                     = "icat-pkp-ojs-public"
   project                  = local.project_id
@@ -308,3 +320,55 @@ resource "google_storage_bucket" "icat_pkp_ojs_public" {
   storage_class = "STANDARD"
 }
 # terraform import google_storage_bucket.icat_pkp_ojs_public icat-pkp-ojs-public
+
+resource "random_password" "pkp_db_password" {
+  length  = 32
+  special = true
+}
+
+resource "google_sql_user" "icat" {
+  instance = google_sql_database_instance.pkp_ojs.name
+  name     = "icat"
+  password = random_password.pkp_db_password.result
+  project  = local.project_id
+}
+
+resource "google_secret_manager_secret" "pkp_db_user" {
+  secret_id = "pkp-db-user"
+  project   = local.project_id
+
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "pkp_db_user" {
+  secret      = google_secret_manager_secret.pkp_db_user.id
+  secret_data = google_sql_user.icat.name
+}
+
+resource "google_secret_manager_secret" "pkp_db_password" {
+  secret_id = "pkp-db-password"
+  project   = local.project_id
+
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "pkp_db_password" {
+  secret      = google_secret_manager_secret.pkp_db_password.id
+  secret_data = random_password.pkp_db_password.result
+}
+
+resource "google_secret_manager_secret_iam_member" "pkp_db_user_access" {
+  secret_id = google_secret_manager_secret.pkp_db_user.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "pkp_db_password_access" {
+  secret_id = google_secret_manager_secret.pkp_db_password.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
+}
