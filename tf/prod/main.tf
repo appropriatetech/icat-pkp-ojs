@@ -2,7 +2,7 @@ locals {
   project_id = "inat-359418"
   region     = "us-central1"
 
-  pkp_ojs_env_vars = {
+  pkp_ojs_env_safe_values = {
     # Refer to https://hub.docker.com/r/pkpofficial/ojs#environment-variables
     
     PKP_TOOL               = "ojs"  # Tool to run or build. Options: ojs, omp, ops
@@ -57,6 +57,11 @@ locals {
     for env_var, secret_name in local.pkp_ojs_env_secrets :
     env_var => google_secret_manager_secret_version.pkp_ojs_secret_version[secret_name].secret_data
   }
+
+  pkp_ojs_env_all_values = merge(
+    local.pkp_ojs_env_safe_values,
+    local.pkp_ojs_env_secret_values,
+  )
 }
 
 resource "google_artifact_registry_repository" "cloud_run_source_deploy" {
@@ -133,6 +138,11 @@ resource "google_sql_database_instance" "pkp_ojs" {
 # terraform import google_sql_database_instance.pkp_ojs projects/inat-359418/instances/pkp-ojs
 
 resource "google_cloud_run_v2_service" "icat_pkp_ojs" {
+  depends_on = [
+    google_storage_bucket_object.apache_htaccess,
+    google_storage_bucket_object.pkp_config_inc_php,
+  ]
+
   client         = "gcloud"
   client_version = "531.0.0"
   ingress        = "INGRESS_TRAFFIC_ALL"
@@ -142,13 +152,10 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs" {
   project        = local.project_id
   build_config {
     enable_automatic_updates = false
-    environment_variables = merge({
-      for k, v in local.pkp_ojs_env_vars :
+    environment_variables = {
+      for k, v in local.pkp_ojs_env_all_values :
       k => v
-    }, {
-      for k, v in local.pkp_ojs_env_secret_values :
-      k => v
-    })
+    }
     image_uri       = "us-central1-docker.pkg.dev/inat-359418/cloud-run-source-deploy/icat-pkp-ojs"
     service_account = google_service_account.pkp_ojs_sa.id
     source_location = "gs://run-sources-inat-359418-us-central1/services/icat-pkp-ojs/1757956567.426021-a003ea97231f4cd2afd2f9513c6a6b79.zip#1757956567585535"
@@ -156,7 +163,7 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs" {
   template {
     containers {
       dynamic "env" {
-        for_each = local.pkp_ojs_env_vars
+        for_each = local.pkp_ojs_env_safe_values
         content {
           name  = env.key
           value = env.value
@@ -389,4 +396,16 @@ resource "google_secret_manager_secret_iam_member" "pkp_ojs_secret_access" {
   secret_id = google_secret_manager_secret.pkp_ojs_secret[each.key].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
+}
+
+resource "google_storage_bucket_object" "apache_htaccess" {
+  bucket  = google_storage_bucket.icat_pkp_ojs_config.name
+  content = file("${path.module}/config/apache.htaccess")
+  name    = "apache.htaccess"
+}
+
+resource "google_storage_bucket_object" "pkp_config_inc_php" {
+  bucket  = google_storage_bucket.icat_pkp_ojs_config.name
+  content = templatefile("${path.module}/config/pkp.config.inc.php", local.pkp_ojs_env_all_values)
+  name    = "config.inc.php"
 }
