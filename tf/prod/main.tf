@@ -3,31 +3,59 @@ locals {
   region     = "us-central1"
 
   pkp_ojs_env_vars = {
-    PKP_TOOL               = "ojs"
+    # Refer to https://hub.docker.com/r/pkpofficial/ojs#environment-variables
+    
+    PKP_TOOL               = "ojs"  # Tool to run or build. Options: ojs, omp, ops
     PKP_VERSION            = "3_3_0-21"
     WEB_SERVER             = "php:8.2-apache"
+    
+    ### Journal / Project Settings --------------------------------------------------
     COMPOSE_PROJECT_NAME   = "ojs"
     PROJECT_DOMAIN         = "conference-submissions.appropriatetech.net"
     SERVERNAME             = "conference-submissions.appropriatetech.net"
+
+    ### Web Server Settings --------------------------------------------------------
     WEB_USER               = "www-data"
     WEB_PATH               = "/var/www/html"
+
+    ### PKP Tool Variables ---------------------------------------------------------
     PKP_CLI_INSTALL        = "0"
     PKP_DB_HOST            = google_sql_database_instance.pkp_ojs.private_ip_address
     PKP_DB_NAME            = google_sql_database.icat.name
+    PKP_SMTP_HOST          = "smtp-relay.gmail.com"
+    PKP_SMTP_PORT          = "587"
     PKP_WEB_CONF           = "/etc/apache2/conf-enabled/pkp.conf"
     PKP_CONF               = "/var/www/html/config.inc.php"
+
+    ### Build Variables (experts only) ---------------------------------------------
     BUILD_PKP_APP_OS       = "alpine:3.22"
     BUILD_PKP_APP_PATH     = "/app"
   }
 
+  pkp_ojs_secrets = {
+    "pkp-db-user"     = google_sql_user.icat.name
+    "pkp-db-password" = random_password.pkp_db_password.result
+    "pkp-ojs-salt"    = random_string.pkp_salt.result
+    "pkp-smtp-user"   = var.pkp_smtp_user
+    "pkp-smtp-pass"   = var.pkp_smtp_pass
+  }
+
+  pkp_ojs_env_secrets = {
+    PKP_DB_USER     = "pkp-db-user"
+    PKP_DB_PASSWORD = "pkp-db-password"
+    PKP_SALT        = "pkp-ojs-salt"
+    PKP_SMTP_USER   = "pkp-smtp-user"
+    PKP_SMTP_PASSWORD   = "pkp-smtp-pass"
+  }
+
   pkp_ojs_env_secret_ids = {
-    PKP_DB_USER     = google_secret_manager_secret.pkp_db_user.secret_id
-    PKP_DB_PASSWORD = google_secret_manager_secret.pkp_db_password.secret_id
+    for env_var, secret_name in local.pkp_ojs_env_secrets :
+    env_var => google_secret_manager_secret.pkp_ojs_secret[secret_name].secret_id
   }
 
   pkp_ojs_env_secret_values = {
-    PKP_DB_USER     = google_secret_manager_secret_version.pkp_db_user.secret_data
-    PKP_DB_PASSWORD = google_secret_manager_secret_version.pkp_db_password.secret_data
+    for env_var, secret_name in local.pkp_ojs_env_secrets :
+    env_var => google_secret_manager_secret_version.pkp_ojs_secret_version[secret_name].secret_data
   }
 }
 
@@ -333,8 +361,14 @@ resource "google_sql_user" "icat" {
   project  = local.project_id
 }
 
-resource "google_secret_manager_secret" "pkp_db_user" {
-  secret_id = "pkp-db-user"
+resource "random_string" "pkp_salt" {
+  length  = 32
+}
+
+resource "google_secret_manager_secret" "pkp_ojs_secret" {
+  for_each = local.pkp_ojs_secrets
+
+  secret_id = each.key
   project   = local.project_id
 
   replication {
@@ -342,33 +376,17 @@ resource "google_secret_manager_secret" "pkp_db_user" {
   }
 }
 
-resource "google_secret_manager_secret_version" "pkp_db_user" {
-  secret      = google_secret_manager_secret.pkp_db_user.id
-  secret_data = google_sql_user.icat.name
+resource "google_secret_manager_secret_version" "pkp_ojs_secret_version" {
+  for_each = local.pkp_ojs_secrets
+
+  secret      = google_secret_manager_secret.pkp_ojs_secret[each.key].id
+  secret_data = each.value
 }
 
-resource "google_secret_manager_secret" "pkp_db_password" {
-  secret_id = "pkp-db-password"
-  project   = local.project_id
+resource "google_secret_manager_secret_iam_member" "pkp_ojs_secret_access" {
+  for_each = local.pkp_ojs_secrets
 
-  replication {
-    auto {}
-  }
-}
-
-resource "google_secret_manager_secret_version" "pkp_db_password" {
-  secret      = google_secret_manager_secret.pkp_db_password.id
-  secret_data = random_password.pkp_db_password.result
-}
-
-resource "google_secret_manager_secret_iam_member" "pkp_db_user_access" {
-  secret_id = google_secret_manager_secret.pkp_db_user.id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
-}
-
-resource "google_secret_manager_secret_iam_member" "pkp_db_password_access" {
-  secret_id = google_secret_manager_secret.pkp_db_password.id
+  secret_id = google_secret_manager_secret.pkp_ojs_secret[each.key].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
 }
