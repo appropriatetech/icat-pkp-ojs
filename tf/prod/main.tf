@@ -64,6 +64,26 @@ locals {
   )
 }
 
+resource "google_project_service" "compute" {
+  project = local.project_id
+  service = "compute.googleapis.com"
+}
+
+resource "google_project_service" "artifactregistry" {
+  project = local.project_id
+  service = "artifactregistry.googleapis.com"
+}
+
+resource "google_project_service" "run" {
+  project = local.project_id
+  service = "run.googleapis.com"
+}
+
+resource "google_project_service" "secretmanager" {
+  project = local.project_id
+  service = "secretmanager.googleapis.com"
+}
+
 resource "google_artifact_registry_repository" "cloud_run_source_deploy" {
   description   = "Cloud Run Source Deployments"
   format        = "DOCKER"
@@ -141,6 +161,12 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs" {
   depends_on = [
     google_storage_bucket_object.apache_htaccess,
     google_storage_bucket_object.pkp_config_inc_php,
+    google_project_iam_member.pkp_ojs_cloudsql_client,
+    google_storage_bucket_iam_member.pkp_ojs_config_viewer,
+    google_storage_bucket_iam_member.pkp_ojs_private_admin,
+    google_storage_bucket_iam_member.pkp_ojs_logs_admin,
+    google_storage_bucket_iam_member.pkp_ojs_public_admin,
+    google_secret_manager_secret_iam_member.pkp_ojs_secret_access,
   ]
 
   client         = "gcloud"
@@ -231,6 +257,7 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs" {
     scaling {
       max_instance_count = 10
     }
+    service_account = google_service_account.pkp_ojs_sa.email
     timeout = "300s"
     volumes {
       name = "public-files"
@@ -273,7 +300,7 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs" {
           "uid=33",
           "gid=33",
         ]
-        read_only = false
+        read_only = true
       }
     }
     volumes {
@@ -329,6 +356,36 @@ resource "google_service_account" "pkp_ojs_sa" {
   project      = local.project_id
 }
 # terraform import google_service_account.pkp_ojs_sa projects/inat-359418/serviceAccounts/pkp-ojs-sa@inat-359418.iam.gserviceaccount.com
+
+resource "google_project_iam_member" "pkp_ojs_cloudsql_client" {
+  project = local.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
+}
+
+resource "google_storage_bucket_iam_member" "pkp_ojs_config_viewer" {
+  bucket = google_storage_bucket.icat_pkp_ojs_config.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
+}
+
+resource "google_storage_bucket_iam_member" "pkp_ojs_private_admin" {
+  bucket = google_storage_bucket.icat_pkp_ojs_private.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
+}
+
+resource "google_storage_bucket_iam_member" "pkp_ojs_logs_admin" {
+  bucket = google_storage_bucket.icat_pkp_ojs_logs.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
+}
+
+resource "google_storage_bucket_iam_member" "pkp_ojs_public_admin" {
+  bucket = google_storage_bucket.icat_pkp_ojs_public.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
+}
 
 resource "google_storage_bucket" "icat_pkp_ojs_logs" {
   force_destroy            = false
@@ -407,5 +464,5 @@ resource "google_storage_bucket_object" "apache_htaccess" {
 resource "google_storage_bucket_object" "pkp_config_inc_php" {
   bucket  = google_storage_bucket.icat_pkp_ojs_config.name
   content = templatefile("${path.module}/config/pkp.config.inc.php", local.pkp_ojs_env_all_values)
-  name    = "config.inc.php"
+  name    = "pkp.config.inc.php"
 }
