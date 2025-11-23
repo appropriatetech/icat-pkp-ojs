@@ -1,37 +1,44 @@
+# ============================================================================
+# Local Variables
+# ============================================================================
+
 locals {
   project_id = "inat-359418"
   region     = "us-central1"
 
+  # Non-sensitive environment variables for PKP OJS
+  # Refer to https://hub.docker.com/r/pkpofficial/ojs#environment-variables
   pkp_ojs_env_safe_values = {
-    # Refer to https://hub.docker.com/r/pkpofficial/ojs#environment-variables
-    
-    PKP_TOOL               = "ojs"  # Tool to run or build. Options: ojs, omp, ops
-    PKP_VERSION            = "3_3_0-21"
-    WEB_SERVER             = "php:8.2-apache"
-    
+
+    PKP_TOOL    = "ojs" # Tool to run or build. Options: ojs, omp, ops
+    PKP_VERSION = "3_3_0-21"
+    WEB_SERVER  = "php:8.2-apache"
+
     ### Journal / Project Settings --------------------------------------------------
-    COMPOSE_PROJECT_NAME   = "ojs"
-    PROJECT_DOMAIN         = "conference-submissions.appropriatetech.net"
-    SERVERNAME             = "conference-submissions.appropriatetech.net"
+    COMPOSE_PROJECT_NAME = "ojs"
+    PROJECT_DOMAIN       = "conference-submissions.appropriatetech.net"
+    SERVERNAME           = "conference-submissions.appropriatetech.net"
 
     ### Web Server Settings --------------------------------------------------------
-    WEB_USER               = "www-data"
-    WEB_PATH               = "/var/www/html"
+    WEB_USER = "www-data"
+    WEB_PATH = "/var/www/html"
 
     ### PKP Tool Variables ---------------------------------------------------------
-    PKP_CLI_INSTALL        = "0"
-    PKP_DB_HOST            = google_sql_database_instance.pkp_ojs.private_ip_address
-    PKP_DB_NAME            = google_sql_database.icat.name
-    PKP_SMTP_HOST          = "smtp-relay.gmail.com"
-    PKP_SMTP_PORT          = "587"
-    PKP_WEB_CONF           = "/etc/apache2/conf-enabled/pkp.conf"
-    PKP_CONF               = "/var/www/html/config.inc.php"
+    PKP_CLI_INSTALL = "0"
+    PKP_DB_HOST     = google_sql_database_instance.pkp_ojs.private_ip_address
+    PKP_DB_NAME     = google_sql_database.icat.name
+    PKP_SMTP_HOST   = "smtp-relay.gmail.com"
+    PKP_SMTP_PORT   = "587"
+    PKP_WEB_CONF    = "/etc/apache2/conf-enabled/pkp.conf"
+    PKP_CONF        = "/var/www/html/config.inc.php"
 
     ### Build Variables (experts only) ---------------------------------------------
-    BUILD_PKP_APP_OS       = "alpine:3.22"
-    BUILD_PKP_APP_PATH     = "/app"
+    BUILD_PKP_APP_OS   = "alpine:3.22"
+    BUILD_PKP_APP_PATH = "/app"
   }
 
+  # Map of secret IDs to their values
+  # These will be stored in Google Secret Manager
   pkp_ojs_secrets = {
     "pkp-db-user"     = google_sql_user.icat.name
     "pkp-db-password" = random_password.pkp_db_password.result
@@ -40,29 +47,39 @@ locals {
     "pkp-smtp-pass"   = var.pkp_smtp_pass
   }
 
+  # Map of environment variable names to secret IDs
+  # This decouples env var names from secret IDs for flexibility
   pkp_ojs_env_secrets = {
-    PKP_DB_USER     = "pkp-db-user"
-    PKP_DB_PASSWORD = "pkp-db-password"
-    PKP_SALT        = "pkp-ojs-salt"
-    PKP_SMTP_USER   = "pkp-smtp-user"
-    PKP_SMTP_PASSWORD   = "pkp-smtp-pass"
+    PKP_DB_USER       = "pkp-db-user"
+    PKP_DB_PASSWORD   = "pkp-db-password"
+    PKP_SALT          = "pkp-ojs-salt"
+    PKP_SMTP_USER     = "pkp-smtp-user"
+    PKP_SMTP_PASSWORD = "pkp-smtp-pass"
   }
 
+  # Derived map for Cloud Run - references secrets by their Secret Manager IDs
   pkp_ojs_env_secret_ids = {
     for env_var, secret_name in local.pkp_ojs_env_secrets :
     env_var => google_secret_manager_secret.pkp_ojs_secret[secret_name].secret_id
   }
 
+  # Derived map for build config - gets actual secret values
   pkp_ojs_env_secret_values = {
     for env_var, secret_name in local.pkp_ojs_env_secrets :
     env_var => google_secret_manager_secret_version.pkp_ojs_secret_version[secret_name].secret_data
   }
 
+  # Combined map of all environment variables (safe + secret values)
+  # Used for build-time configuration
   pkp_ojs_env_all_values = merge(
     local.pkp_ojs_env_safe_values,
     local.pkp_ojs_env_secret_values,
   )
 }
+
+# ============================================================================
+# Google Cloud APIs
+# ============================================================================
 
 resource "google_project_service" "compute" {
   project = local.project_id
@@ -84,6 +101,10 @@ resource "google_project_service" "secretmanager" {
   service = "secretmanager.googleapis.com"
 }
 
+# ============================================================================
+# Artifact Registry
+# ============================================================================
+
 resource "google_artifact_registry_repository" "cloud_run_source_deploy" {
   description   = "Cloud Run Source Deployments"
   format        = "DOCKER"
@@ -93,6 +114,10 @@ resource "google_artifact_registry_repository" "cloud_run_source_deploy" {
   repository_id = "cloud-run-source-deploy"
 }
 # terraform import google_artifact_registry_repository.cloud_run_source_deploy projects/inat-359418/locations/us-central1/repositories/cloud-run-source-deploy
+
+# ============================================================================
+# Cloud SQL (Database)
+# ============================================================================
 
 resource "google_sql_database" "icat" {
   instance = google_sql_database_instance.pkp_ojs.name
@@ -157,7 +182,31 @@ resource "google_sql_database_instance" "pkp_ojs" {
 }
 # terraform import google_sql_database_instance.pkp_ojs projects/inat-359418/instances/pkp-ojs
 
+# Database user
+resource "google_sql_user" "icat" {
+  instance = google_sql_database_instance.pkp_ojs.name
+  name     = "icat"
+  password = random_password.pkp_db_password.result
+  project  = local.project_id
+}
+
+# Random password for database user
+resource "random_password" "pkp_db_password" {
+  length  = 32
+  special = true
+}
+
+# ============================================================================
+# Cloud Run Service
+# ============================================================================
+
+# Random salt for PKP OJS encryption
+resource "random_string" "pkp_salt" {
+  length = 32
+}
+
 resource "google_cloud_run_v2_service" "icat_pkp_ojs" {
+  # Wait for IAM permissions and config files to be ready
   depends_on = [
     google_storage_bucket_object.apache_htaccess,
     google_storage_bucket_object.pkp_config_inc_php,
@@ -258,7 +307,7 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs" {
       max_instance_count = 10
     }
     service_account = google_service_account.pkp_ojs_sa.email
-    timeout = "300s"
+    timeout         = "300s"
     volumes {
       name = "public-files"
       gcs {
@@ -323,6 +372,11 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs" {
 }
 # terraform import google_cloud_run_v2_service.icat_pkp_ojs projects/inat-359418/locations/us-central1/services/icat-pkp-ojs
 
+# ============================================================================
+# Cloud Storage Buckets
+# ============================================================================
+
+# Config bucket - stores read-only config files
 resource "google_storage_bucket" "icat_pkp_ojs_config" {
   force_destroy            = false
   location                 = local.region
@@ -336,6 +390,7 @@ resource "google_storage_bucket" "icat_pkp_ojs_config" {
 }
 # terraform import google_storage_bucket.icat_pkp_ojs_config icat-pkp-ojs-config
 
+# Private files bucket - stores user uploads and private files
 resource "google_storage_bucket" "icat_pkp_ojs_private" {
   force_destroy            = false
   location                 = local.region
@@ -349,44 +404,7 @@ resource "google_storage_bucket" "icat_pkp_ojs_private" {
 }
 # terraform import google_storage_bucket.icat_pkp_ojs_private icat-pkp-ojs-private
 
-resource "google_service_account" "pkp_ojs_sa" {
-  account_id   = "pkp-ojs-sa"
-  description  = "Service account for PKP OJS"
-  display_name = "PKP OJS Service Account"
-  project      = local.project_id
-}
-# terraform import google_service_account.pkp_ojs_sa projects/inat-359418/serviceAccounts/pkp-ojs-sa@inat-359418.iam.gserviceaccount.com
-
-resource "google_project_iam_member" "pkp_ojs_cloudsql_client" {
-  project = local.project_id
-  role    = "roles/cloudsql.client"
-  member  = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
-}
-
-resource "google_storage_bucket_iam_member" "pkp_ojs_config_viewer" {
-  bucket = google_storage_bucket.icat_pkp_ojs_config.name
-  role   = "roles/storage.objectViewer"
-  member = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
-}
-
-resource "google_storage_bucket_iam_member" "pkp_ojs_private_admin" {
-  bucket = google_storage_bucket.icat_pkp_ojs_private.name
-  role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
-}
-
-resource "google_storage_bucket_iam_member" "pkp_ojs_logs_admin" {
-  bucket = google_storage_bucket.icat_pkp_ojs_logs.name
-  role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
-}
-
-resource "google_storage_bucket_iam_member" "pkp_ojs_public_admin" {
-  bucket = google_storage_bucket.icat_pkp_ojs_public.name
-  role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
-}
-
+# Logs bucket - stores Apache error logs
 resource "google_storage_bucket" "icat_pkp_ojs_logs" {
   force_destroy            = false
   location                 = local.region
@@ -400,6 +418,7 @@ resource "google_storage_bucket" "icat_pkp_ojs_logs" {
 }
 # terraform import google_storage_bucket.icat_pkp_ojs_logs icat-pkp-ojs-logs
 
+# Public files bucket - stores publicly accessible files
 resource "google_storage_bucket" "icat_pkp_ojs_public" {
   force_destroy            = false
   location                 = local.region
@@ -413,22 +432,24 @@ resource "google_storage_bucket" "icat_pkp_ojs_public" {
 }
 # terraform import google_storage_bucket.icat_pkp_ojs_public icat-pkp-ojs-public
 
-resource "random_password" "pkp_db_password" {
-  length  = 32
-  special = true
+# Config files uploaded to the config bucket
+resource "google_storage_bucket_object" "apache_htaccess" {
+  bucket  = google_storage_bucket.icat_pkp_ojs_config.name
+  content = file("${path.module}/config/apache.htaccess")
+  name    = "apache.htaccess"
 }
 
-resource "google_sql_user" "icat" {
-  instance = google_sql_database_instance.pkp_ojs.name
-  name     = "icat"
-  password = random_password.pkp_db_password.result
-  project  = local.project_id
+resource "google_storage_bucket_object" "pkp_config_inc_php" {
+  bucket  = google_storage_bucket.icat_pkp_ojs_config.name
+  content = templatefile("${path.module}/config/pkp.config.inc.php", local.pkp_ojs_env_all_values)
+  name    = "pkp.config.inc.php"
 }
 
-resource "random_string" "pkp_salt" {
-  length  = 32
-}
+# ============================================================================
+# Secrets Management
+# ============================================================================
 
+# Create secrets in Secret Manager (one for each key in pkp_ojs_secrets)
 resource "google_secret_manager_secret" "pkp_ojs_secret" {
   for_each = local.pkp_ojs_secrets
 
@@ -440,6 +461,7 @@ resource "google_secret_manager_secret" "pkp_ojs_secret" {
   }
 }
 
+# Store secret values in Secret Manager
 resource "google_secret_manager_secret_version" "pkp_ojs_secret_version" {
   for_each = local.pkp_ojs_secrets
 
@@ -447,22 +469,58 @@ resource "google_secret_manager_secret_version" "pkp_ojs_secret_version" {
   secret_data = each.value
 }
 
+# ============================================================================
+# Service Account & IAM Permissions
+# ============================================================================
+
+resource "google_service_account" "pkp_ojs_sa" {
+  account_id   = "pkp-ojs-sa"
+  description  = "Service account for PKP OJS"
+  display_name = "PKP OJS Service Account"
+  project      = local.project_id
+}
+# terraform import google_service_account.pkp_ojs_sa projects/inat-359418/serviceAccounts/pkp-ojs-sa@inat-359418.iam.gserviceaccount.com
+
+# Grant Cloud SQL client access for database connectivity
+resource "google_project_iam_member" "pkp_ojs_cloudsql_client" {
+  project = local.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
+}
+
+# Grant read-only access to config bucket
+resource "google_storage_bucket_iam_member" "pkp_ojs_config_viewer" {
+  bucket = google_storage_bucket.icat_pkp_ojs_config.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
+}
+
+# Grant read/write access to private files bucket
+resource "google_storage_bucket_iam_member" "pkp_ojs_private_admin" {
+  bucket = google_storage_bucket.icat_pkp_ojs_private.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
+}
+
+# Grant read/write access to logs bucket
+resource "google_storage_bucket_iam_member" "pkp_ojs_logs_admin" {
+  bucket = google_storage_bucket.icat_pkp_ojs_logs.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
+}
+
+# Grant read/write access to public files bucket
+resource "google_storage_bucket_iam_member" "pkp_ojs_public_admin" {
+  bucket = google_storage_bucket.icat_pkp_ojs_public.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
+}
+
+# Grant service account access to read secrets
 resource "google_secret_manager_secret_iam_member" "pkp_ojs_secret_access" {
   for_each = local.pkp_ojs_secrets
 
   secret_id = google_secret_manager_secret.pkp_ojs_secret[each.key].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
-}
-
-resource "google_storage_bucket_object" "apache_htaccess" {
-  bucket  = google_storage_bucket.icat_pkp_ojs_config.name
-  content = file("${path.module}/config/apache.htaccess")
-  name    = "apache.htaccess"
-}
-
-resource "google_storage_bucket_object" "pkp_config_inc_php" {
-  bucket  = google_storage_bucket.icat_pkp_ojs_config.name
-  content = templatefile("${path.module}/config/pkp.config.inc.php", local.pkp_ojs_env_all_values)
-  name    = "pkp.config.inc.php"
 }
