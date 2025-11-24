@@ -263,7 +263,7 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs_server" {
         }
       }
 
-      image = "us-central1-docker.pkg.dev/inat-359418/cloud-run-source-deploy/icat-pkp-ojs:latest"
+      image = "${local.region}-docker.pkg.dev/${local.project_id}/cloud-run-source-deploy/icat-pkp-ojs:latest"
       name  = "icat-pkp-ojs-1"
       ports {
         container_port = 8080
@@ -386,7 +386,7 @@ resource "google_cloud_run_v2_job" "icat_pkp_ojs_scheduled" {
   template {
     template {
       containers {
-        image = "us-central1-docker.pkg.dev/inat-359418/cloud-run-source-deploy/icat-pkp-ojs:latest"
+        image = "${local.region}-docker.pkg.dev/${local.project_id}/cloud-run-source-deploy/icat-pkp-ojs:latest"
         
         # Run the scheduled tasks script
         command = ["pkp-run-scheduled"]
