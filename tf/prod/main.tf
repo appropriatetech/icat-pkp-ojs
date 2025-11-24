@@ -6,6 +6,9 @@ locals {
   project_id = "inat-359418"
   region     = "us-central1"
 
+  pkp_ojs_container_repo = "https://github.com/appropriatetech/pkp-containers.git"
+  pkp_ojs_container_local_path = "${path.module}/../containers/"
+
   # Non-sensitive environment variables for PKP OJS
   # Refer to https://hub.docker.com/r/pkpofficial/ojs#environment-variables
   pkp_ojs_env_safe_values = {
@@ -118,7 +121,6 @@ resource "google_artifact_registry_repository" "cloud_run_source_deploy" {
   project       = local.project_id
   repository_id = "cloud-run-source-deploy"
 }
-# terraform import google_artifact_registry_repository.cloud_run_source_deploy projects/inat-359418/locations/us-central1/repositories/cloud-run-source-deploy
 
 # ============================================================================
 # Cloud SQL (Database)
@@ -129,7 +131,6 @@ resource "google_sql_database" "icat" {
   name     = "icat"
   project  = local.project_id
 }
-# terraform import google_sql_database.icat inat-359418/pkp-ojs/icat
 
 resource "google_sql_database_instance" "pkp_ojs" {
   database_version    = "MYSQL_8_4"
@@ -166,10 +167,10 @@ resource "google_sql_database_instance" "pkp_ojs" {
 
     ip_configuration {
       ipv4_enabled    = false
-      private_network = "projects/inat-359418/global/networks/default"
+      private_network = "projects/${local.project_id}/global/networks/default"
     }
     location_preference {
-      zone = "us-central1-a"
+      zone = "${local.region}-a"
     }
     maintenance_window {
       update_track = "canary"
@@ -185,7 +186,6 @@ resource "google_sql_database_instance" "pkp_ojs" {
     retain_backups_on_delete = true
   }
 }
-# terraform import google_sql_database_instance.pkp_ojs projects/inat-359418/instances/pkp-ojs
 
 # Database user
 resource "google_sql_user" "icat" {
@@ -236,9 +236,12 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs_server" {
       for k, v in local.pkp_ojs_env_all_values :
       k => v
     }
-    image_uri       = "us-central1-docker.pkg.dev/inat-359418/cloud-run-source-deploy/icat-pkp-ojs"
+    image_uri       = "${local.region}-docker.pkg.dev/${local.project_id}/cloud-run-source-deploy/icat-pkp-ojs"
     service_account = google_service_account.pkp_ojs_sa.id
-    source_location = "gs://run-sources-inat-359418-us-central1/services/icat-pkp-ojs/1757956567.426021-a003ea97231f4cd2afd2f9513c6a6b79.zip#1757956567585535"
+
+    # TODO: Automate source upload and versioning based on container definition
+    # (i.e. pkp_ojs_container_repo or pkp_ojs_container_local_path)
+    source_location = "gs://run-sources-${local.project_id}-${local.region}/services/icat-pkp-ojs/1757956567.426021-a003ea97231f4cd2afd2f9513c6a6b79.zip#1757956567585535"
   }
   template {
     containers {
@@ -263,6 +266,8 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs_server" {
         }
       }
 
+      # TODO: Specify image tag so that we can control versions and ensure
+      # a new deployment when the image is updated.
       image = "${local.region}-docker.pkg.dev/${local.project_id}/cloud-run-source-deploy/icat-pkp-ojs:latest"
       name  = "icat-pkp-ojs-1"
       ports {
@@ -359,7 +364,7 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs_server" {
     }
     volumes {
       cloud_sql_instance {
-        instances = ["inat-359418:us-central1:pkp-ojs"]
+        instances = ["${local.project_id}:${local.region}:pkp-ojs"]
       }
       name = "cloudsql"
     }
@@ -375,7 +380,6 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs_server" {
     type    = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
   }
 }
-# terraform import google_cloud_run_v2_service.icat_pkp_ojs_server projects/inat-359418/locations/us-central1/services/icat-pkp-ojs
 
 # Cloud Run job for scheduled tasks (runs pkp-run-scheduled script)
 resource "google_cloud_run_v2_job" "icat_pkp_ojs_scheduled" {
@@ -386,6 +390,8 @@ resource "google_cloud_run_v2_job" "icat_pkp_ojs_scheduled" {
   template {
     template {
       containers {
+        # TODO: Specify image tag so that we can control versions and ensure
+        # a new deployment when the image is updated.
         image = "${local.region}-docker.pkg.dev/${local.project_id}/cloud-run-source-deploy/icat-pkp-ojs:latest"
         
         # Run the scheduled tasks script
@@ -493,7 +499,7 @@ resource "google_cloud_run_v2_job" "icat_pkp_ojs_scheduled" {
       }
       volumes {
         cloud_sql_instance {
-          instances = ["inat-359418:us-central1:pkp-ojs"]
+          instances = ["${local.project_id}:${local.region}:pkp-ojs"]
         }
         name = "cloudsql"
       }
@@ -547,7 +553,6 @@ resource "google_storage_bucket" "icat_pkp_ojs_config" {
   }
   storage_class = "STANDARD"
 }
-# terraform import google_storage_bucket.icat_pkp_ojs_config icat-pkp-ojs-config
 
 # Private files bucket - stores user uploads and private files
 resource "google_storage_bucket" "icat_pkp_ojs_private" {
@@ -561,7 +566,6 @@ resource "google_storage_bucket" "icat_pkp_ojs_private" {
   }
   storage_class = "STANDARD"
 }
-# terraform import google_storage_bucket.icat_pkp_ojs_private icat-pkp-ojs-private
 
 # Logs bucket - stores Apache error logs
 resource "google_storage_bucket" "icat_pkp_ojs_logs" {
@@ -575,7 +579,6 @@ resource "google_storage_bucket" "icat_pkp_ojs_logs" {
   }
   storage_class = "STANDARD"
 }
-# terraform import google_storage_bucket.icat_pkp_ojs_logs icat-pkp-ojs-logs
 
 # Public files bucket - stores publicly accessible files
 resource "google_storage_bucket" "icat_pkp_ojs_public" {
@@ -589,7 +592,6 @@ resource "google_storage_bucket" "icat_pkp_ojs_public" {
   }
   storage_class = "STANDARD"
 }
-# terraform import google_storage_bucket.icat_pkp_ojs_public icat-pkp-ojs-public
 
 # Config files uploaded to the config bucket
 resource "google_storage_bucket_object" "apache_htaccess" {
@@ -638,7 +640,6 @@ resource "google_service_account" "pkp_ojs_sa" {
   display_name = "PKP OJS Service Account"
   project      = local.project_id
 }
-# terraform import google_service_account.pkp_ojs_sa projects/inat-359418/serviceAccounts/pkp-ojs-sa@inat-359418.iam.gserviceaccount.com
 
 # Grant Cloud SQL client access for database connectivity
 resource "google_project_iam_member" "pkp_ojs_cloudsql_client" {
