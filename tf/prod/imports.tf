@@ -29,7 +29,7 @@ import {
 }
 
 import {
-  to = google_cloud_run_v2_service.icat_pkp_ojs
+  to = google_cloud_run_v2_service.icat_pkp_ojs_server
   id = "projects/inat-359418/locations/us-central1/services/icat-pkp-ojs"
 }
 

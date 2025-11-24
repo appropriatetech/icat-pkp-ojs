@@ -101,6 +101,11 @@ resource "google_project_service" "secretmanager" {
   service = "secretmanager.googleapis.com"
 }
 
+resource "google_project_service" "cloudscheduler" {
+  project = local.project_id
+  service = "cloudscheduler.googleapis.com"
+}
+
 # ============================================================================
 # Artifact Registry
 # ============================================================================
@@ -205,7 +210,7 @@ resource "random_string" "pkp_salt" {
   length = 32
 }
 
-resource "google_cloud_run_v2_service" "icat_pkp_ojs" {
+resource "google_cloud_run_v2_service" "icat_pkp_ojs_server" {
   # Wait for IAM permissions and config files to be ready
   depends_on = [
     google_storage_bucket_object.apache_htaccess,
@@ -370,7 +375,161 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs" {
     type    = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
   }
 }
-# terraform import google_cloud_run_v2_service.icat_pkp_ojs projects/inat-359418/locations/us-central1/services/icat-pkp-ojs
+# terraform import google_cloud_run_v2_service.icat_pkp_ojs_server projects/inat-359418/locations/us-central1/services/icat-pkp-ojs
+
+# Cloud Run job for scheduled tasks (runs pkp-run-scheduled script)
+resource "google_cloud_run_v2_job" "icat_pkp_ojs_scheduled" {
+  name     = "icat-pkp-ojs-scheduled"
+  location = local.region
+  project  = local.project_id
+
+  template {
+    template {
+      containers {
+        image = "us-central1-docker.pkg.dev/inat-359418/cloud-run-source-deploy/icat-pkp-ojs:latest"
+        
+        # Run the scheduled tasks script
+        command = ["pkp-run-scheduled"]
+
+        # Environment variables - same as the service
+        dynamic "env" {
+          for_each = local.pkp_ojs_env_safe_values
+          content {
+            name  = env.key
+            value = env.value
+          }
+        }
+
+        dynamic "env" {
+          for_each = local.pkp_ojs_env_secret_ids
+          content {
+            name = env.key
+            value_source {
+              secret_key_ref {
+                secret  = env.value
+                version = "latest"
+              }
+            }
+          }
+        }
+
+        resources {
+          limits = {
+            cpu    = "1000m"
+            memory = "2Gi"
+          }
+        }
+
+        # Mount the same volumes as the server
+        volume_mounts {
+          mount_path = "/var/www/html/public"
+          name       = "public-files"
+        }
+        volume_mounts {
+          mount_path = "/var/www/files"
+          name       = "private-files"
+        }
+        volume_mounts {
+          mount_path = "/var/log/apache2"
+          name       = "log-files"
+        }
+        volume_mounts {
+          mount_path = "/var/www/config"
+          name       = "config-files"
+        }
+        volume_mounts {
+          mount_path = "/cloudsql"
+          name       = "cloudsql"
+        }
+      }
+
+      max_retries     = 0
+      service_account = google_service_account.pkp_ojs_sa.email
+      timeout         = "3600s"
+
+      volumes {
+        name = "public-files"
+        gcs {
+          bucket = google_storage_bucket.icat_pkp_ojs_public.name
+          mount_options = [
+            "uid=33",
+            "gid=33",
+          ]
+          read_only = false
+        }
+      }
+      volumes {
+        name = "private-files"
+        gcs {
+          bucket = google_storage_bucket.icat_pkp_ojs_private.name
+          mount_options = [
+            "uid=33",
+            "gid=33",
+          ]
+          read_only = false
+        }
+      }
+      volumes {
+        name = "log-files"
+        gcs {
+          bucket = google_storage_bucket.icat_pkp_ojs_logs.name
+          mount_options = [
+            "uid=33",
+            "gid=33",
+          ]
+          read_only = false
+        }
+      }
+      volumes {
+        name = "config-files"
+        gcs {
+          bucket = google_storage_bucket.icat_pkp_ojs_config.name
+          mount_options = [
+            "uid=33",
+            "gid=33",
+          ]
+          read_only = true
+        }
+      }
+      volumes {
+        cloud_sql_instance {
+          instances = ["inat-359418:us-central1:pkp-ojs"]
+        }
+        name = "cloudsql"
+      }
+
+      vpc_access {
+        egress = "PRIVATE_RANGES_ONLY"
+        network_interfaces {
+          network = "default"
+        }
+      }
+    }
+  }
+}
+
+# Cloud Scheduler job to trigger the scheduled tasks hourly
+resource "google_cloud_scheduler_job" "icat_pkp_ojs_scheduled_trigger" {
+  name             = "icat-pkp-ojs-scheduled-trigger"
+  description      = "Triggers PKP OJS scheduled tasks every hour"
+  schedule         = "0 * * * *"  # Run at the start of every hour
+  attempt_deadline = "320s"
+  region           = local.region
+  project          = local.project_id
+
+  retry_config {
+    retry_count = 1
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "https://${local.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${local.project_id}/jobs/${google_cloud_run_v2_job.icat_pkp_ojs_scheduled.name}:run"
+
+    oauth_token {
+      service_account_email = google_service_account.pkp_ojs_sa.email
+    }
+  }
+}
 
 # ============================================================================
 # Cloud Storage Buckets
@@ -485,6 +644,13 @@ resource "google_service_account" "pkp_ojs_sa" {
 resource "google_project_iam_member" "pkp_ojs_cloudsql_client" {
   project = local.project_id
   role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
+}
+
+# Grant permission to invoke Cloud Run jobs (for scheduler to trigger scheduled tasks)
+resource "google_project_iam_member" "pkp_ojs_run_invoker" {
+  project = local.project_id
+  role    = "roles/run.invoker"
   member  = "serviceAccount:${google_service_account.pkp_ojs_sa.email}"
 }
 
