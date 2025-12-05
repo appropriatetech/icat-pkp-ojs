@@ -7,7 +7,7 @@ locals {
   region     = "us-central1"
 
   pkp_ojs_container_repo = "https://github.com/appropriatetech/pkp-containers.git"
-  pkp_ojs_container_local_path = "${path.module}/../containers/"
+  pkp_ojs_container_local_path = "${path.module}/../../../containers/"
 
   # Non-sensitive environment variables for PKP OJS
   # Refer to https://hub.docker.com/r/pkpofficial/ojs#environment-variables
@@ -122,6 +122,26 @@ resource "google_artifact_registry_repository" "cloud_run_source_deploy" {
   repository_id = "cloud-run-source-deploy"
 }
 
+# Build and push PKP OJS container image to Artifact Registry
+resource "null_resource" "pkp_ojs_container_build" {
+  # Trigger a new build whenever the container source changes
+  triggers = {
+    container_source = sha256(join("", [
+      for file in fileset(local.pkp_ojs_container_local_path, "**") :
+      filesha256("${local.pkp_ojs_container_local_path}/${file}")
+    ]))
+    timestamp = replace(timestamp(), ":", "")
+  }
+
+  provisioner "local-exec" {
+    command = "${path.module}/scripts/submit_build.py --registry-uri ${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri} --tag ${self.triggers.timestamp} --env-vars '${replace(jsonencode(local.pkp_ojs_env_all_values), "'", "'\\''")}' --source-path ${local.pkp_ojs_container_local_path} --project-id ${local.project_id} --region ${local.region}"
+  }
+
+  depends_on = [
+    google_project_service.artifactregistry,
+  ]
+}
+
 # ============================================================================
 # Cloud SQL (Database)
 # ============================================================================
@@ -211,7 +231,7 @@ resource "random_string" "pkp_salt" {
 }
 
 resource "google_cloud_run_v2_service" "icat_pkp_ojs_server" {
-  # Wait for IAM permissions and config files to be ready
+  # Wait for IAM permissions, config files, and container image to be ready
   depends_on = [
     google_storage_bucket_object.apache_htaccess,
     google_storage_bucket_object.pkp_config_inc_php,
@@ -221,6 +241,7 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs_server" {
     google_storage_bucket_iam_member.pkp_ojs_logs_admin,
     google_storage_bucket_iam_member.pkp_ojs_public_admin,
     google_secret_manager_secret_iam_member.pkp_ojs_secret_access,
+    null_resource.pkp_ojs_container_build,
   ]
 
   client         = "gcloud"
@@ -230,19 +251,7 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs_server" {
   location       = local.region
   name           = "icat-pkp-ojs"
   project        = local.project_id
-  build_config {
-    enable_automatic_updates = false
-    environment_variables = {
-      for k, v in local.pkp_ojs_env_all_values :
-      k => v
-    }
-    image_uri       = "${local.region}-docker.pkg.dev/${local.project_id}/cloud-run-source-deploy/icat-pkp-ojs"
-    service_account = google_service_account.pkp_ojs_sa.id
 
-    # TODO: Automate source upload and versioning based on container definition
-    # (i.e. pkp_ojs_container_repo or pkp_ojs_container_local_path)
-    source_location = "gs://run-sources-${local.project_id}-${local.region}/services/icat-pkp-ojs/1757956567.426021-a003ea97231f4cd2afd2f9513c6a6b79.zip#1757956567585535"
-  }
   template {
     containers {
       dynamic "env" {
@@ -266,9 +275,8 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs_server" {
         }
       }
 
-      # TODO: Specify image tag so that we can control versions and ensure
-      # a new deployment when the image is updated.
-      image = "${local.region}-docker.pkg.dev/${local.project_id}/cloud-run-source-deploy/icat-pkp-ojs:latest"
+      # Use the timestamped image from the build
+      image = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.timestamp}"
       name  = "icat-pkp-ojs-1"
       ports {
         container_port = 8080
@@ -387,12 +395,15 @@ resource "google_cloud_run_v2_job" "icat_pkp_ojs_scheduled" {
   location = local.region
   project  = local.project_id
 
+  depends_on = [
+    null_resource.pkp_ojs_container_build,
+  ]
+
   template {
     template {
       containers {
-        # TODO: Specify image tag so that we can control versions and ensure
-        # a new deployment when the image is updated.
-        image = "${local.region}-docker.pkg.dev/${local.project_id}/cloud-run-source-deploy/icat-pkp-ojs:latest"
+        # Use the timestamped image from the build
+        image = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.timestamp}"
         
         # Run the scheduled tasks script
         command = ["pkp-run-scheduled"]
