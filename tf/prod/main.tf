@@ -48,6 +48,7 @@ locals {
     "pkp-db-password" = random_password.pkp_db_password.result
     "pkp-ojs-salt"    = random_string.pkp_salt.result
     "pkp-ojs-api-key" = random_password.pkp_api_key.result
+    "pkp-app-key"     = "base64:${random_id.pkp_app_key.b64_std}"
     "pkp-smtp-user"   = var.pkp_smtp_user
     "pkp-smtp-pass"   = var.pkp_smtp_pass
   }
@@ -59,6 +60,7 @@ locals {
     PKP_DB_PASSWORD   = "pkp-db-password"
     PKP_SALT          = "pkp-ojs-salt"
     PKP_API_KEY       = "pkp-ojs-api-key"
+    PKP_APP_KEY       = "pkp-app-key"
     PKP_SMTP_USER     = "pkp-smtp-user"
     PKP_SMTP_PASSWORD = "pkp-smtp-pass"
   }
@@ -237,6 +239,11 @@ resource "random_string" "pkp_salt" {
 resource "random_password" "pkp_api_key" {
   length  = 32
   special = false
+}
+
+# Random App Key for PKP OJS (Laravel)
+resource "random_id" "pkp_app_key" {
+  byte_length = 32
 }
 
 resource "google_cloud_run_v2_service" "icat_pkp_ojs_server" {
