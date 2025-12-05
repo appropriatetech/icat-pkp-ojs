@@ -14,13 +14,14 @@ locals {
   pkp_ojs_env_safe_values = {
 
     PKP_TOOL    = "ojs" # Tool to run or build. Options: ojs, omp, ops
-    PKP_VERSION = "3_3_0-21"
+    PKP_VERSION = "3_5_0-2"
     WEB_SERVER  = "php:8.2-apache"
 
     ### Journal / Project Settings --------------------------------------------------
     COMPOSE_PROJECT_NAME = "ojs"
     PROJECT_DOMAIN       = "conference-submissions.appropriatetech.net"
     SERVERNAME           = "conference-submissions.appropriatetech.net"
+    BASE_URL             = "https://conference-submissions.appropriatetech.net/"
 
     ### Web Server Settings --------------------------------------------------------
     WEB_USER = "www-data"
@@ -46,6 +47,7 @@ locals {
     "pkp-db-user"     = google_sql_user.icat.name
     "pkp-db-password" = random_password.pkp_db_password.result
     "pkp-ojs-salt"    = random_string.pkp_salt.result
+    "pkp-ojs-api-key" = random_password.pkp_api_key.result
     "pkp-smtp-user"   = var.pkp_smtp_user
     "pkp-smtp-pass"   = var.pkp_smtp_pass
   }
@@ -56,6 +58,7 @@ locals {
     PKP_DB_USER       = "pkp-db-user"
     PKP_DB_PASSWORD   = "pkp-db-password"
     PKP_SALT          = "pkp-ojs-salt"
+    PKP_API_KEY       = "pkp-ojs-api-key"
     PKP_SMTP_USER     = "pkp-smtp-user"
     PKP_SMTP_PASSWORD = "pkp-smtp-pass"
   }
@@ -228,6 +231,12 @@ resource "random_password" "pkp_db_password" {
 # Random salt for PKP OJS encryption
 resource "random_string" "pkp_salt" {
   length = 32
+}
+
+# Random API key for PKP OJS
+resource "random_password" "pkp_api_key" {
+  length  = 32
+  special = false
 }
 
 resource "google_cloud_run_v2_service" "icat_pkp_ojs_server" {
@@ -407,6 +416,142 @@ resource "google_cloud_run_v2_job" "icat_pkp_ojs_scheduled" {
         
         # Run the scheduled tasks script
         command = ["pkp-run-scheduled"]
+
+        # Environment variables - same as the service
+        dynamic "env" {
+          for_each = local.pkp_ojs_env_safe_values
+          content {
+            name  = env.key
+            value = env.value
+          }
+        }
+
+        dynamic "env" {
+          for_each = local.pkp_ojs_env_secret_ids
+          content {
+            name = env.key
+            value_source {
+              secret_key_ref {
+                secret  = env.value
+                version = "latest"
+              }
+            }
+          }
+        }
+
+        resources {
+          limits = {
+            cpu    = "1000m"
+            memory = "2Gi"
+          }
+        }
+
+        # Mount the same volumes as the server
+        volume_mounts {
+          mount_path = "/var/www/html/public"
+          name       = "public-files"
+        }
+        volume_mounts {
+          mount_path = "/var/www/files"
+          name       = "private-files"
+        }
+        volume_mounts {
+          mount_path = "/var/log/apache2"
+          name       = "log-files"
+        }
+        volume_mounts {
+          mount_path = "/var/www/config"
+          name       = "config-files"
+        }
+        volume_mounts {
+          mount_path = "/cloudsql"
+          name       = "cloudsql"
+        }
+      }
+
+      max_retries     = 0
+      service_account = google_service_account.pkp_ojs_sa.email
+      timeout         = "3600s"
+
+      volumes {
+        name = "public-files"
+        gcs {
+          bucket = google_storage_bucket.icat_pkp_ojs_public.name
+          mount_options = [
+            "uid=33",
+            "gid=33",
+          ]
+          read_only = false
+        }
+      }
+      volumes {
+        name = "private-files"
+        gcs {
+          bucket = google_storage_bucket.icat_pkp_ojs_private.name
+          mount_options = [
+            "uid=33",
+            "gid=33",
+          ]
+          read_only = false
+        }
+      }
+      volumes {
+        name = "log-files"
+        gcs {
+          bucket = google_storage_bucket.icat_pkp_ojs_logs.name
+          mount_options = [
+            "uid=33",
+            "gid=33",
+          ]
+          read_only = false
+        }
+      }
+      volumes {
+        name = "config-files"
+        gcs {
+          bucket = google_storage_bucket.icat_pkp_ojs_config.name
+          mount_options = [
+            "uid=33",
+            "gid=33",
+          ]
+          read_only = true
+        }
+      }
+      volumes {
+        cloud_sql_instance {
+          instances = ["${local.project_id}:${local.region}:pkp-ojs"]
+        }
+        name = "cloudsql"
+      }
+
+      vpc_access {
+        egress = "PRIVATE_RANGES_ONLY"
+        network_interfaces {
+          network = "default"
+        }
+      }
+    }
+  }
+}
+
+# Cloud Run job for manual upgrades (runs pkp-upgrade script)
+resource "google_cloud_run_v2_job" "icat_pkp_ojs_upgrade" {
+  name     = "icat-pkp-ojs-upgrade"
+  location = local.region
+  project  = local.project_id
+
+  depends_on = [
+    null_resource.pkp_ojs_container_build,
+  ]
+
+  template {
+    template {
+      containers {
+        # Use the timestamped image from the build
+        image = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.timestamp}"
+        
+        # Run the upgrade script
+        command = ["pkp-upgrade"]
 
         # Environment variables - same as the service
         dynamic "env" {
