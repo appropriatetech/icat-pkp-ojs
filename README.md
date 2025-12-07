@@ -189,10 +189,16 @@ gcloud storage cat gs://icat-pkp-ojs-logs/error.log | tail -20
 gcloud sql connect pkp-ojs --user=icat --database=icat
 ```
 
-### Connect to a Shell in a Running Service
+### Connect to a Shell in the Image (e.g. to inspect the filesystem structure)
 
 ```bash
-gcloud beta run services proxy icat-pkp-ojs --region=us-central1
+# For docker:
+gcloud auth configure-docker us-central1-docker.pkg.dev
+docker run -it --entrypoint /bin/bash us-central1-docker.pkg.dev/inat-359418/cloud-run-source-deploy/icat-pkp-ojs:latest
+
+# For podman:
+gcloud auth print-access-token | podman login -u oauth2accesstoken --password-stdin us-central1-docker.pkg.dev
+podman run -it --entrypoint /bin/bash us-central1-docker.pkg.dev/inat-359418/cloud-run-source-deploy/icat-pkp-ojs:latest
 ```
 
 ### Force Service Restart
