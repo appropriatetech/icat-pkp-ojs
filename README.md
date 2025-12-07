@@ -127,6 +127,10 @@ gcloud run jobs execute icat-pkp-ojs-upgrade --region=us-central1 --wait
 
 ## Upgrading OJS
 
+The currently used version of OJS is specified in `tf/prod/main.tf` under the `PKP_VERSION` variable.
+
+> **NOTE Version 3.5.0-2 has a bug in the reviewer search -- see https://github.com/pkp/pkp-lib/issues/12100#issuecomment-3614365262; this we have patched this bug in our custom container image. If updating from version 3.5.0-2, check whether this patch is necessary any longer.**
+
 To upgrade OJS (e.g., from 3.3 to 3.5):
 
 1. **Backup the database**:
