@@ -21,18 +21,21 @@ This repository contains the infrastructure-as-code (IaC) for deploying PKP Open
 ### Initial Setup
 
 1. **Set required variables** (create `tf/prod/.auto.tfvars`):
+
    ```hcl
    pkp_smtp_user = "your-smtp-user"
    pkp_smtp_pass = "your-smtp-password"
    ```
 
 2. **Initialize Terraform**:
+
    ```bash
    cd tf/prod
    tofu init
    ```
 
 3. **Generate the random APP_KEY** (required for OJS 3.5+):
+
    ```bash
    tofu apply -target=random_id.pkp_app_key
    ```
@@ -40,11 +43,13 @@ This repository contains the infrastructure-as-code (IaC) for deploying PKP Open
    > NOTE: This is done in a separate apply step because the random ID must exist before uploading the configuration file that uses it, due to the way that the `random_id` provider defers value generation until apply time. See the note on the `random_id.pkp_app_key` resource in `main.tf` for more details.
 
 4. **Deploy the infrastructure**:
+
    ```bash
    tofu apply
    ```
 
 This will:
+
 - Create all cloud resources (database, storage buckets, service account, etc.)
 - Build and deploy the container image
 - Configure environment variables and secrets
@@ -129,7 +134,7 @@ gcloud run jobs execute icat-pkp-ojs-upgrade --region=us-central1 --wait
 
 The currently used version of OJS is specified in `tf/prod/main.tf` under the `PKP_VERSION` variable.
 
-> **NOTE Version 3.5.0-2 has a bug in the reviewer search -- see https://github.com/pkp/pkp-lib/issues/12100#issuecomment-3614365262; this we have patched this bug in our custom container image. If updating from version 3.5.0-2, check whether this patch is necessary any longer.**
+> **NOTE Version 3.5.0-2 has a bug in the reviewer search -- see <https://github.com/pkp/pkp-lib/issues/12100#issuecomment-3614365262>; this we have patched this bug in our custom container image. If updating from version 3.5.0-2, check whether this patch is necessary any longer.**
 
 To upgrade OJS (e.g., from 3.3 to 3.5):
 
