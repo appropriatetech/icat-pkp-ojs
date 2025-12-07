@@ -350,7 +350,7 @@ force_dmarc_compliant_from = On
 ; be changed by adding a text here.
 ; You can use '%n' to insert the users name from the original from header
 ; and '%s' to insert the localized sitename.
-dmarc_compliant_from_displayname = 'International Network on Appropriate Technology'
+dmarc_compliant_from_displayname = '%n (via International Network on Appropriate Technology)'
 
 ; If enabled, email addresses must be validated before login is possible.
 require_validation = On
