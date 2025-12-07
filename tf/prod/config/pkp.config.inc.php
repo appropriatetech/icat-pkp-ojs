@@ -298,10 +298,13 @@ allowed_title_html = "b,i,u,sup,sub"
 
 ; Default method to send emails
 ; Available options: sendmail, smtp, log, phpmailer
-default = sendmail
+; Use 'smtp' to send via SMTP server (recommended for Cloud Run)
+; Use 'log' to log emails to files instead of sending (for debugging)
+default = smtp
 
 ; Path to the sendmail, -bs argument is for using SMTP protocol
-sendmail_path = "/usr/sbin/sendmail -bs"
+; Not used when default = smtp
+; sendmail_path = "/usr/sbin/sendmail -bs"
 
 ; Use SMTP for sending mail instead of mail()
 smtp = On
@@ -322,15 +325,15 @@ smtp_password = "${PKP_SMTP_PASSWORD}"
 
 ; Allow envelope sender to be specified
 ; (may not be possible with some server configurations)
-; allow_envelope_sender = Off
+allow_envelope_sender = On
 
 ; Default envelope sender to use if none is specified elsewhere
-; default_envelope_sender = my_address@my_host.com
+default_envelope_sender = ${PKP_DEFAULT_ENVELOPE_SENDER}
 
 ; Force the default envelope sender (if present)
 ; This is useful if setting up a site-wide no-reply address
 ; The reply-to field will be set with the reply-to or from address.
-; force_default_envelope_sender = Off
+force_default_envelope_sender = On
 
 ; Force a DMARC compliant from header (RFC5322.From)
 ; If any of your users have email addresses in domains not under your control
@@ -340,14 +343,14 @@ smtp_password = "${PKP_SMTP_PASSWORD}"
 ; from field wil be rewritten with the default_envelope_sender.
 ; To use this you must set force_default_enveloper_sender = On and
 ; default_envelope_sender must be set to a valid address in a domain you own.
-; force_dmarc_compliant_from = Off
+force_dmarc_compliant_from = On
 
 ; The display name to use with a DMARC compliant from header
 ; By default the DMARC compliant from will have an empty name but this can
 ; be changed by adding a text here.
 ; You can use '%n' to insert the users name from the original from header
 ; and '%s' to insert the localized sitename.
-; dmarc_compliant_from_displayname = '%n via %s'
+dmarc_compliant_from_displayname = 'International Network on Appropriate Technology'
 
 ; If enabled, email addresses must be validated before login is possible.
 require_validation = On

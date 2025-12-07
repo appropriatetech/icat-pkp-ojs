@@ -18,10 +18,11 @@ locals {
     WEB_SERVER  = "php:8.2-apache"
 
     ### Journal / Project Settings --------------------------------------------------
-    COMPOSE_PROJECT_NAME = "ojs"
-    PROJECT_DOMAIN       = "conference-submissions.appropriatetech.net"
-    SERVERNAME           = "conference-submissions.appropriatetech.net"
-    BASE_URL             = "https://conference-submissions.appropriatetech.net"
+    COMPOSE_PROJECT_NAME        = "ojs"
+    PROJECT_DOMAIN              = "conference-submissions.appropriatetech.net"
+    SERVERNAME                  = "conference-submissions.appropriatetech.net"
+    BASE_URL                    = "https://conference-submissions.appropriatetech.net"
+    PKP_DEFAULT_ENVELOPE_SENDER = "conferences@appropriatetech.net"
 
     ### Web Server Settings --------------------------------------------------------
     WEB_USER = "www-data"
