@@ -6,7 +6,7 @@ locals {
   project_id = "inat-359418"
   region     = "us-central1"
 
-  pkp_ojs_container_repo = "https://github.com/appropriatetech/pkp-containers.git"
+  pkp_ojs_container_repo       = "https://github.com/appropriatetech/pkp-containers.git"
   pkp_ojs_container_local_path = "${path.module}/../../../containers/"
 
   # Non-sensitive environment variables for PKP OJS
@@ -429,7 +429,7 @@ resource "google_cloud_run_v2_job" "icat_pkp_ojs_scheduled" {
       containers {
         # Use the timestamped image from the build
         image = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.timestamp}"
-        
+
         # Run the scheduled tasks script
         command = ["pkp-run-scheduled"]
 
@@ -565,7 +565,7 @@ resource "google_cloud_run_v2_job" "icat_pkp_ojs_upgrade" {
       containers {
         # Use the timestamped image from the build
         image = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.timestamp}"
-        
+
         # Run the upgrade script
         command = ["pkp-upgrade"]
 
@@ -690,7 +690,7 @@ resource "google_cloud_run_v2_job" "icat_pkp_ojs_upgrade" {
 resource "google_cloud_scheduler_job" "icat_pkp_ojs_scheduled_trigger" {
   name             = "icat-pkp-ojs-scheduled-trigger"
   description      = "Triggers PKP OJS scheduled tasks every hour"
-  schedule         = "0 * * * *"  # Run at the start of every hour
+  schedule         = "0 * * * *" # Run at the start of every hour
   attempt_deadline = "320s"
   region           = local.region
   project          = local.project_id
