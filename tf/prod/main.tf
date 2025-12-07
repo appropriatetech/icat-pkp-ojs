@@ -21,7 +21,7 @@ locals {
     COMPOSE_PROJECT_NAME = "ojs"
     PROJECT_DOMAIN       = "conference-submissions.appropriatetech.net"
     SERVERNAME           = "conference-submissions.appropriatetech.net"
-    BASE_URL             = "https://conference-submissions.appropriatetech.net/"
+    BASE_URL             = "https://conference-submissions.appropriatetech.net"
 
     ### Web Server Settings --------------------------------------------------------
     WEB_USER = "www-data"
@@ -198,6 +198,8 @@ resource "google_sql_database_instance" "pkp_ojs" {
       zone = "${local.region}-a"
     }
     maintenance_window {
+      day          = 7 # Sunday
+      hour         = 3 # 3 AM
       update_track = "canary"
     }
     password_validation_policy {
@@ -242,6 +244,12 @@ resource "random_password" "pkp_api_key" {
 }
 
 # Random App Key for PKP OJS (Laravel)
+# NOTE: If you receive a "Provider produced inconsistent final plan" error regarding
+# google_storage_bucket_object.pkp_config_inc_php during apply, it is likely because
+# this random_id is being generated in the same run as the file upload.
+#
+# Fix: Run `tofu apply -target=random_id.pkp_app_key` first to generate the key,
+# then run `tofu apply` to complete the deployment.
 resource "random_id" "pkp_app_key" {
   byte_length = 32
 }
