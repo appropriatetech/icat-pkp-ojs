@@ -102,7 +102,7 @@ allowed_hosts = '["${SERVERNAME}"]'
 ; Set this to "On" if you are behind a reverse proxy and you control the
 ; X_FORWARDED_FOR header.
 ; Warning: This defaults to "On" if unset for backwards compatibility.
-trust_x_forwarded_for = Off
+trust_x_forwarded_for = On
 
 ; Display a message on the site admin and journal manager user home pages if there is an upgrade available
 show_upgrade_warning = On
