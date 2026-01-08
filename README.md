@@ -144,6 +144,21 @@ gcloud run jobs execute icat-pkp-ojs-automate-transition --region=us-central1 --
 gcloud run jobs execute icat-pkp-ojs-automate-transition --region=us-central1 --wait
 ```
 
+### Automate Request Revisions Job
+
+This one-off job sets the decision to "Request Revisions" for submissions in **External Review Round 2**, ensuring revisions are not subject to a new peer review round, and **suppresses all email notifications**.
+
+See [`containers/tools/README.md`](../containers/tools/README.md) for details.
+
+```bash
+# Dry run
+gcloud run jobs execute icat-pkp-ojs-automate-revisions --region=us-central1 --args="--dry-run" --wait
+
+# Execute for real
+gcloud run jobs execute icat-pkp-ojs-automate-revisions --region=us-central1 --wait
+```
+
+
 ## Upgrading OJS
 
 The currently used version of OJS is specified in `tf/prod/main.tf` under the `PKP_VERSION` variable.
