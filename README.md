@@ -130,6 +130,20 @@ Run manually when upgrading OJS versions:
 gcloud run jobs execute icat-pkp-ojs-upgrade --region=us-central1 --wait
 ```
 
+### Automate Transition Job
+
+This one-off job transitions submissions from copyediting (Stage 4) back to a new external review round (Stage 3, Round 2). It was created to support a bulk workflow correction and **suppresses all email notifications**.
+
+See [`containers/tools/README.md`](../containers/tools/README.md) for details on what the script does and how it works.
+
+```bash
+# Dry run - show what would be done without making changes
+gcloud run jobs execute icat-pkp-ojs-automate-transition --region=us-central1 --args="--dry-run" --wait
+
+# Execute for real
+gcloud run jobs execute icat-pkp-ojs-automate-transition --region=us-central1 --wait
+```
+
 ## Upgrading OJS
 
 The currently used version of OJS is specified in `tf/prod/main.tf` under the `PKP_VERSION` variable.

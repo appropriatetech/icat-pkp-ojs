@@ -686,6 +686,142 @@ resource "google_cloud_run_v2_job" "icat_pkp_ojs_upgrade" {
   }
 }
 
+# Cloud Run job for automating copyediting-to-review transition
+resource "google_cloud_run_v2_job" "icat_pkp_ojs_automate_transition" {
+  name     = "icat-pkp-ojs-automate-transition"
+  location = local.region
+  project  = local.project_id
+
+  depends_on = [
+    null_resource.pkp_ojs_container_build,
+  ]
+
+  template {
+    template {
+      containers {
+        # Use the timestamped image from the build
+        image = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.timestamp}"
+
+        # Run the automation script
+        command = ["php", "tools/automateCopyeditingTransition.php"]
+
+        # Environment variables - same as the service
+        dynamic "env" {
+          for_each = local.pkp_ojs_env_safe_values
+          content {
+            name  = env.key
+            value = env.value
+          }
+        }
+
+        dynamic "env" {
+          for_each = local.pkp_ojs_env_secret_ids
+          content {
+            name = env.key
+            value_source {
+              secret_key_ref {
+                secret  = env.value
+                version = "latest"
+              }
+            }
+          }
+        }
+
+        resources {
+          limits = {
+            cpu    = "1000m"
+            memory = "2Gi"
+          }
+        }
+
+        # Mount the same volumes as the server
+        volume_mounts {
+          mount_path = "/var/www/html/public"
+          name       = "public-files"
+        }
+        volume_mounts {
+          mount_path = "/var/www/files"
+          name       = "private-files"
+        }
+        volume_mounts {
+          mount_path = "/var/log/apache2"
+          name       = "log-files"
+        }
+        volume_mounts {
+          mount_path = "/var/www/config"
+          name       = "config-files"
+        }
+        volume_mounts {
+          mount_path = "/cloudsql"
+          name       = "cloudsql"
+        }
+      }
+
+      max_retries     = 0
+      service_account = google_service_account.pkp_ojs_sa.email
+      timeout         = "3600s"
+
+      volumes {
+        name = "public-files"
+        gcs {
+          bucket = google_storage_bucket.icat_pkp_ojs_public.name
+          mount_options = [
+            "uid=33",
+            "gid=33",
+          ]
+          read_only = false
+        }
+      }
+      volumes {
+        name = "private-files"
+        gcs {
+          bucket = google_storage_bucket.icat_pkp_ojs_private.name
+          mount_options = [
+            "uid=33",
+            "gid=33",
+          ]
+          read_only = false
+        }
+      }
+      volumes {
+        name = "log-files"
+        gcs {
+          bucket = google_storage_bucket.icat_pkp_ojs_logs.name
+          mount_options = [
+            "uid=33",
+            "gid=33",
+          ]
+          read_only = false
+        }
+      }
+      volumes {
+        name = "config-files"
+        gcs {
+          bucket = google_storage_bucket.icat_pkp_ojs_config.name
+          mount_options = [
+            "uid=33",
+            "gid=33",
+          ]
+          read_only = true
+        }
+      }
+      volumes {
+        cloud_sql_instance {
+          instances = ["${local.project_id}:${local.region}:pkp-ojs"]
+        }
+        name = "cloudsql"
+      }
+
+      vpc_access {
+        egress = "PRIVATE_RANGES_ONLY"
+        network_interfaces {
+          network = "default"
+        }
+      }
+    }
+  }
+}
+
 # Cloud Scheduler job to trigger the scheduled tasks hourly
 resource "google_cloud_scheduler_job" "icat_pkp_ojs_scheduled_trigger" {
   name             = "icat-pkp-ojs-scheduled-trigger"
