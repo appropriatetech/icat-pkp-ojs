@@ -21,6 +21,7 @@ def send_batch():
     smtp_port = int(os.environ.get('SMTP_PORT', 587))
     smtp_user = os.environ.get('SMTP_USER')
     smtp_pass = os.environ.get('SMTP_PASSWORD')
+    smtp_local_hostname = os.environ.get('SMTP_LOCAL_HOSTNAME', 'conference-submissions.appropriatetech.net')
 
     try:
         # Construct Select Statement
@@ -49,7 +50,9 @@ def send_batch():
 
         # Connect to SMTP server
         try:
-            with smtplib.SMTP(smtp_host, smtp_port) as server:
+            logger.info(f"Connecting to SMTP server {smtp_host}:{smtp_port} (user={smtp_user!r}, local_hostname={smtp_local_hostname!r})")
+            with smtplib.SMTP(smtp_host, smtp_port, local_hostname=smtp_local_hostname, timeout=30) as server:
+                server.set_debuglevel(1)
                 server.starttls()
                 if smtp_user and smtp_pass:
                     server.login(smtp_user, smtp_pass)

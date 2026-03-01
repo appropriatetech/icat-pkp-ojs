@@ -9,3 +9,15 @@ variable "pkp_smtp_pass" {
   type        = string
   sensitive   = true
 }
+
+variable "email_relay_test_sender" {
+  description = "Sender address for the email relay integration test"
+  type        = string
+  default     = null
+}
+
+variable "email_relay_test_recipient" {
+  description = "Recipient address for the email relay integration test"
+  type        = string
+  default     = null
+}

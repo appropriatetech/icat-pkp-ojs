@@ -8,6 +8,7 @@ locals {
 
   pkp_ojs_container_repo       = "https://github.com/appropriatetech/pkp-containers.git"
   pkp_ojs_container_local_path = "${path.module}/../../../containers/"
+  pkp_ojs_email_relay_path     = "${path.module}/../../email-relay/"
 
   # Non-sensitive environment variables for PKP OJS
   # Refer to https://hub.docker.com/r/pkpofficial/ojs#environment-variables
@@ -132,15 +133,22 @@ resource "google_artifact_registry_repository" "cloud_run_source_deploy" {
 resource "null_resource" "pkp_ojs_container_build" {
   # Trigger a new build whenever the container source changes
   triggers = {
-    container_source = sha256(join("", [
+    source_hash = sha256(join("", [
       for file in fileset(local.pkp_ojs_container_local_path, "**") :
       filesha256("${local.pkp_ojs_container_local_path}/${file}")
+    ], [
+      for file in setunion(
+        fileset(local.pkp_ojs_email_relay_path, "*.py"),
+        fileset(local.pkp_ojs_email_relay_path, "*.ini"),
+        fileset(local.pkp_ojs_email_relay_path, "*alembic/*"),
+        fileset(local.pkp_ojs_email_relay_path, "*alembic/versions/*"),
+      ) :
+      filesha256("${local.pkp_ojs_email_relay_path}/${file}")
     ]))
-    timestamp = replace(timestamp(), ":", "")
   }
 
   provisioner "local-exec" {
-    command = "${path.module}/scripts/submit_build.py --registry-uri ${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri} --tag ${self.triggers.timestamp} --env-vars '${replace(jsonencode(local.pkp_ojs_env_all_values), "'", "'\\''")}' --source-path ${local.pkp_ojs_container_local_path} --project-id ${local.project_id} --region ${local.region}"
+    command = "${path.module}/scripts/submit_build.py --registry-uri ${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri} --tag ${self.triggers.source_hash} --env-vars '${replace(jsonencode(local.pkp_ojs_env_all_values), "'", "'\\''")}' --source-path ${local.pkp_ojs_container_local_path} --project-id ${local.project_id} --region ${local.region}"
   }
 
   depends_on = [
@@ -300,8 +308,8 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs_server" {
         }
       }
 
-      # Use the timestamped image from the build
-      image = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.timestamp}"
+      # Use the hash-stamped image from the build
+      image = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.source_hash}"
       name  = "icat-pkp-ojs-1"
       ports {
         container_port = 8080
@@ -427,8 +435,8 @@ resource "google_cloud_run_v2_job" "icat_pkp_ojs_scheduled" {
   template {
     template {
       containers {
-        # Use the timestamped image from the build
-        image = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.timestamp}"
+        # Use the hash-stamped image from the build
+        image = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.source_hash}"
 
         # Run the scheduled tasks script
         command = ["pkp-run-scheduled"]
@@ -563,8 +571,8 @@ resource "google_cloud_run_v2_job" "icat_pkp_ojs_upgrade" {
   template {
     template {
       containers {
-        # Use the timestamped image from the build
-        image = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.timestamp}"
+        # Use the hash-stamped image from the build
+        image = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.source_hash}"
 
         # Run the upgrade script
         command = ["pkp-upgrade"]
@@ -699,8 +707,8 @@ resource "google_cloud_run_v2_job" "icat_pkp_ojs_automate_transition" {
   template {
     template {
       containers {
-        # Use the timestamped image from the build
-        image = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.timestamp}"
+        # Use the hash-stamped image from the build
+        image = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.source_hash}"
 
         # Run the automation script
         command = ["php", "tools/automateCopyeditingTransition.php"]
@@ -835,8 +843,8 @@ resource "google_cloud_run_v2_job" "icat_pkp_ojs_automate_revisions" {
   template {
     template {
       containers {
-        # Use the timestamped image from the build
-        image = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.timestamp}"
+        # Use the hash-stamped image from the build
+        image = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.source_hash}"
 
         # Run the automation script
         command = ["php", "tools/automateRequestRevisions.php"]
@@ -974,6 +982,446 @@ resource "google_cloud_scheduler_job" "icat_pkp_ojs_scheduled_trigger" {
   http_target {
     http_method = "POST"
     uri         = "https://${local.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${local.project_id}/jobs/${google_cloud_run_v2_job.icat_pkp_ojs_scheduled.name}:run"
+
+    oauth_token {
+      service_account_email = google_service_account.pkp_ojs_sa.email
+    }
+  }
+}
+
+# ============================================================================
+# Email Relay
+# ============================================================================
+
+# Separate database for the email relay queue
+resource "google_sql_database" "email_relay" {
+  instance = google_sql_database_instance.pkp_ojs.name
+  name     = "email_relay"
+  project  = local.project_id
+}
+
+# Cloud Run job for running Alembic database migrations (manually triggered)
+resource "google_cloud_run_v2_job" "icat_pkp_ojs_email_relay_migrate" {
+  name     = "icat-pkp-ojs-email-relay-migrate"
+  location = local.region
+  project  = local.project_id
+
+  depends_on = [
+    null_resource.pkp_ojs_container_build,
+  ]
+
+  template {
+    template {
+      containers {
+        image   = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.source_hash}"
+        command = ["python3", "-m", "alembic", "upgrade", "head"]
+        working_dir = "/opt/email-relay"
+
+        # Database connection
+        env {
+          name  = "DB_HOST"
+          value = "/cloudsql/${local.project_id}:${local.region}:pkp-ojs"
+        }
+        env {
+          name  = "DB_NAME"
+          value = google_sql_database.email_relay.name
+        }
+        env {
+          name = "DB_USER"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-db-user"].secret_id
+              version = "latest"
+            }
+          }
+        }
+        env {
+          name = "DB_PASSWORD"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-db-password"].secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        resources {
+          limits = {
+            cpu    = "1000m"
+            memory = "512Mi"
+          }
+        }
+
+        volume_mounts {
+          mount_path = "/cloudsql"
+          name       = "cloudsql"
+        }
+      }
+
+      max_retries     = 0
+      service_account = google_service_account.pkp_ojs_sa.email
+      timeout         = "120s"
+
+      volumes {
+        cloud_sql_instance {
+          instances = ["${local.project_id}:${local.region}:pkp-ojs"]
+        }
+        name = "cloudsql"
+      }
+
+      vpc_access {
+        egress = "PRIVATE_RANGES_ONLY"
+        network_interfaces {
+          network = "default"
+        }
+      }
+    }
+  }
+}
+
+# Cloud Run job for integration testing the email relay pipeline (manually triggered)
+resource "google_cloud_run_v2_job" "icat_pkp_ojs_email_relay_test" {
+  name     = "icat-pkp-ojs-email-relay-test"
+  location = local.region
+  project  = local.project_id
+
+  depends_on = [
+    null_resource.pkp_ojs_container_build,
+  ]
+
+  template {
+    template {
+      containers {
+        image   = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.source_hash}"
+        command = ["python3", "/opt/email-relay/test_relay.py"]
+
+        # Database connection
+        env {
+          name  = "DB_HOST"
+          value = "/cloudsql/${local.project_id}:${local.region}:pkp-ojs"
+        }
+        env {
+          name  = "DB_NAME"
+          value = google_sql_database.email_relay.name
+        }
+        env {
+          name = "DB_USER"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-db-user"].secret_id
+              version = "latest"
+            }
+          }
+        }
+        env {
+          name = "DB_PASSWORD"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-db-password"].secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        # SMTP connection (used by send_batch)
+        env {
+          name  = "SMTP_HOST"
+          value = "smtp-relay.gmail.com"
+        }
+        env {
+          name  = "SMTP_PORT"
+          value = "587"
+        }
+        env {
+          name = "SMTP_USER"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-smtp-user"].secret_id
+              version = "latest"
+            }
+          }
+        }
+        env {
+          name = "SMTP_PASSWORD"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-smtp-pass"].secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        # Test configuration
+        dynamic "env" {
+          for_each = var.email_relay_test_sender != null ? [var.email_relay_test_sender] : []
+          content {
+            name  = "TEST_SENDER"
+            value = env.value
+          }
+        }
+        dynamic "env" {
+          for_each = var.email_relay_test_recipient != null ? [var.email_relay_test_recipient] : []
+          content {
+            name  = "TEST_RECIPIENT"
+            value = env.value
+          }
+        }
+
+        resources {
+          limits = {
+            cpu    = "1000m"
+            memory = "512Mi"
+          }
+        }
+
+        volume_mounts {
+          mount_path = "/cloudsql"
+          name       = "cloudsql"
+        }
+      }
+
+      max_retries     = 0
+      service_account = google_service_account.pkp_ojs_sa.email
+      timeout         = "120s"
+
+      volumes {
+        cloud_sql_instance {
+          instances = ["${local.project_id}:${local.region}:pkp-ojs"]
+        }
+        name = "cloudsql"
+      }
+
+      vpc_access {
+        egress = "PRIVATE_RANGES_ONLY"
+        network_interfaces {
+          network = "default"
+        }
+      }
+    }
+  }
+}
+resource "google_cloud_run_v2_job" "icat_pkp_ojs_email_send" {
+  name     = "icat-pkp-ojs-email-send"
+  location = local.region
+  project  = local.project_id
+
+  depends_on = [
+    null_resource.pkp_ojs_container_build,
+  ]
+
+  template {
+    template {
+      containers {
+        image   = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.source_hash}"
+        command = ["python3", "/opt/email-relay/send_batch.py"]
+
+        # Database connection
+        env {
+          name  = "DB_HOST"
+          value = "/cloudsql/${local.project_id}:${local.region}:pkp-ojs"
+        }
+        env {
+          name  = "DB_NAME"
+          value = google_sql_database.email_relay.name
+        }
+        env {
+          name = "DB_USER"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-db-user"].secret_id
+              version = "latest"
+            }
+          }
+        }
+        env {
+          name = "DB_PASSWORD"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-db-password"].secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        # SMTP connection
+        env {
+          name  = "SMTP_HOST"
+          value = "smtp-relay.gmail.com"
+        }
+        env {
+          name  = "SMTP_PORT"
+          value = "587"
+        }
+        env {
+          name = "SMTP_USER"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-smtp-user"].secret_id
+              version = "latest"
+            }
+          }
+        }
+        env {
+          name = "SMTP_PASSWORD"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-smtp-pass"].secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        resources {
+          limits = {
+            cpu    = "1000m"
+            memory = "512Mi"
+          }
+        }
+
+        volume_mounts {
+          mount_path = "/cloudsql"
+          name       = "cloudsql"
+        }
+      }
+
+      max_retries     = 1
+      service_account = google_service_account.pkp_ojs_sa.email
+      timeout         = "300s"
+
+      volumes {
+        cloud_sql_instance {
+          instances = ["${local.project_id}:${local.region}:pkp-ojs"]
+        }
+        name = "cloudsql"
+      }
+
+      vpc_access {
+        egress = "PRIVATE_RANGES_ONLY"
+        network_interfaces {
+          network = "default"
+        }
+      }
+    }
+  }
+}
+
+# Cloud Run job for pruning old email queue entries
+resource "google_cloud_run_v2_job" "icat_pkp_ojs_email_prune" {
+  name     = "icat-pkp-ojs-email-prune"
+  location = local.region
+  project  = local.project_id
+
+  depends_on = [
+    null_resource.pkp_ojs_container_build,
+  ]
+
+  template {
+    template {
+      containers {
+        image   = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.source_hash}"
+        command = ["python3", "/opt/email-relay/prune_queue.py"]
+
+        # Database connection
+        env {
+          name  = "DB_HOST"
+          value = "/cloudsql/${local.project_id}:${local.region}:pkp-ojs"
+        }
+        env {
+          name  = "DB_NAME"
+          value = google_sql_database.email_relay.name
+        }
+        env {
+          name = "DB_USER"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-db-user"].secret_id
+              version = "latest"
+            }
+          }
+        }
+        env {
+          name = "DB_PASSWORD"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-db-password"].secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        resources {
+          limits = {
+            cpu    = "1000m"
+            memory = "512Mi"
+          }
+        }
+
+        volume_mounts {
+          mount_path = "/cloudsql"
+          name       = "cloudsql"
+        }
+      }
+
+      max_retries     = 0
+      service_account = google_service_account.pkp_ojs_sa.email
+      timeout         = "300s"
+
+      volumes {
+        cloud_sql_instance {
+          instances = ["${local.project_id}:${local.region}:pkp-ojs"]
+        }
+        name = "cloudsql"
+      }
+
+      vpc_access {
+        egress = "PRIVATE_RANGES_ONLY"
+        network_interfaces {
+          network = "default"
+        }
+      }
+    }
+  }
+}
+
+# Cloud Scheduler job to trigger email sending every 5 minutes
+resource "google_cloud_scheduler_job" "icat_pkp_ojs_email_send_trigger" {
+  name             = "icat-pkp-ojs-email-send-trigger"
+  description      = "Triggers email relay send_batch every 5 minutes"
+  schedule         = "*/5 * * * *"
+  attempt_deadline = "320s"
+  region           = local.region
+  project          = local.project_id
+
+  retry_config {
+    retry_count = 1
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "https://${local.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${local.project_id}/jobs/${google_cloud_run_v2_job.icat_pkp_ojs_email_send.name}:run"
+
+    oauth_token {
+      service_account_email = google_service_account.pkp_ojs_sa.email
+    }
+  }
+}
+
+# Cloud Scheduler job to trigger email queue pruning hourly
+resource "google_cloud_scheduler_job" "icat_pkp_ojs_email_prune_trigger" {
+  name             = "icat-pkp-ojs-email-prune-trigger"
+  description      = "Triggers email relay prune_queue every hour"
+  schedule         = "30 * * * *"
+  attempt_deadline = "320s"
+  region           = local.region
+  project          = local.project_id
+
+  retry_config {
+    retry_count = 1
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "https://${local.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${local.project_id}/jobs/${google_cloud_run_v2_job.icat_pkp_ojs_email_prune.name}:run"
 
     oauth_token {
       service_account_email = google_service_account.pkp_ojs_sa.email

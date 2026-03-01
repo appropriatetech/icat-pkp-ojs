@@ -19,13 +19,17 @@ email_queue = Table('email_queue', metadata,
 def get_engine(db_url=None):
     if db_url is None:
         # Construct DB URL from environment variables for MySQL
-        # Format: mysql+mysqlconnector://user:password@host:port/database
         user = os.environ.get('DB_USER', 'ojs')
         password = os.environ.get('DB_PASSWORD', 'ojs')
         host = os.environ.get('DB_HOST', 'localhost')
         port = os.environ.get('DB_PORT', '3306')
-        name = os.environ.get('DB_NAME', 'ojs')
-        db_url = f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{name}"
+        name = os.environ.get('DB_NAME', 'email_relay')
+
+        # Support Cloud SQL Unix socket if DB_HOST starts with /
+        if host.startswith('/'):
+            db_url = f"mysql+mysqlconnector://{user}:{password}@/{name}?unix_socket={host}"
+        else:
+            db_url = f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{name}"
 
     return create_engine(db_url, pool_recycle=3600)
 

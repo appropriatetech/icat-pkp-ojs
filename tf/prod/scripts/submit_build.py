@@ -8,6 +8,7 @@ import json
 import subprocess
 import sys
 import os
+import shutil
 
 
 def main():
@@ -34,6 +35,23 @@ def main():
     except json.JSONDecodeError as e:
         print(f"Error parsing env-vars JSON: {e}", file=sys.stderr)
         sys.exit(1)
+
+    # Copy email-relay scripts into build context
+    email_relay_src = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'email-relay'))
+    email_relay_dst = os.path.abspath(os.path.join(source_path, 'tools','email-relay'))
+    email_relay_copied = False
+
+    if not os.path.isdir(email_relay_src):
+        print(f"Error: email-relay directory does not exist: {email_relay_src}", file=sys.stderr)
+        sys.exit(1)
+
+    shutil.copytree(
+        email_relay_src, email_relay_dst,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns('__pycache__', '.pytest_cache', '.venv', 'tests'),
+    )
+    email_relay_copied = True
+    print(f"Copied email-relay scripts to {email_relay_dst}")
 
     # Construct build arguments list
     build_args = []
@@ -62,11 +80,11 @@ def main():
     }
 
     config_filename = "cloudbuild.json"
-    
+
     try:
         with open(config_filename, "w") as f:
             json.dump(cloudbuild_config, f, indent=2)
-        
+
         print(f"Generated {config_filename}")
 
         cmd = [
@@ -81,7 +99,7 @@ def main():
         if args.no_submit:
             print("No-submit flag set; skipping build submission.")
             return
-        
+
         subprocess.check_call(cmd)
 
     except subprocess.CalledProcessError as e:
@@ -94,6 +112,10 @@ def main():
         if not args.keep_config and os.path.exists(config_filename):
             os.remove(config_filename)
             print(f"Removed {config_filename}")
+        # # Clean up copied email-relay directory
+        # if email_relay_copied and os.path.isdir(email_relay_dst):
+        #     shutil.rmtree(email_relay_dst)
+        #     print(f"Cleaned up {email_relay_dst}")
 
 if __name__ == "__main__":
     main()
