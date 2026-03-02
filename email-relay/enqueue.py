@@ -49,48 +49,17 @@ def enqueue_email(raw_email, args_sender=None, args_recipients=None):
     finally:
         session.close()
 
-if __name__ == "__main__":
-    # Robust manual argument parsing to mimic sendmail quirkiness
-    # We care about: -f (sender), -t (scan headers), and positional args (recipients)
-    # We ignore others like -i, -oi, -o..., -v etc.
+import click
 
-    args_sender = None
-    args_recipients = []
-
-    idx = 1
-    files_to_read = []
-
-    while idx < len(sys.argv):
-        arg = sys.argv[idx]
-
-        if arg.startswith('-'):
-            # It's a flag
-            if arg == '-f':
-                if idx + 1 < len(sys.argv):
-                    args_sender = sys.argv[idx+1]
-                    idx += 2
-                else:
-                    # Trailing -f? Ignore.
-                    idx += 1
-                continue
-            elif arg.startswith('-f'):
-                # -fSender
-                args_sender = arg[2:]
-            elif arg == '--':
-                # End of flags
-                idx += 1
-                while idx < len(sys.argv):
-                    args_recipients.append(sys.argv[idx])
-                    idx += 1
-                break
-            else:
-                # Ignore other flags (-t, -i, -oi, etc.)
-                pass
-        else:
-            # Positional argument = recipient
-            args_recipients.append(arg)
-
-        idx += 1
+@click.command(context_settings={"ignore_unknown_options": True})
+@click.option('-f', 'args_sender', default=None, help="Sender override")
+@click.argument('args', nargs=-1, type=click.UNPROCESSED)
+def main(args_sender, args):
+    """Enqueue an email from standard input, simulating sendmail interface."""
+    # Mimic the CLI interface of sendmail
+    # We care about: -f (sender), and positional args (recipients)
+    # We ignore others like -t -i, -oi, -o..., -v etc.
+    args_recipients = [arg for arg in args if not arg.startswith('-')]
 
     try:
         raw_content = sys.stdin.buffer.read()
@@ -99,3 +68,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Critical error reading input: {e}", file=sys.stderr)
         sys.exit(1)
+
+if __name__ == "__main__":
+    main()
