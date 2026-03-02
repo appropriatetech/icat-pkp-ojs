@@ -85,6 +85,21 @@ locals {
     local.pkp_ojs_env_safe_values,
     local.pkp_ojs_env_secret_values,
   )
+
+  email_relay_env_safe_values = {
+    EMAIL_RELAY_DB_HOST             = "/cloudsql/${local.project_id}:${local.region}:pkp-ojs"
+    EMAIL_RELAY_DB_NAME             = google_sql_database.email_relay.name
+    EMAIL_RELAY_SMTP_HOST           = "smtp-relay.gmail.com"
+    EMAIL_RELAY_SMTP_PORT           = "587"
+    EMAIL_RELAY_SMTP_LOCAL_HOSTNAME = "conference-submissions.appropriatetech.net"
+  }
+
+  email_relay_env_secret_ids = {
+    EMAIL_RELAY_DB_USER       = google_secret_manager_secret.pkp_ojs_secret["pkp-db-user"].secret_id
+    EMAIL_RELAY_DB_PASSWORD   = google_secret_manager_secret.pkp_ojs_secret["pkp-db-password"].secret_id
+    EMAIL_RELAY_SMTP_USER     = google_secret_manager_secret.pkp_ojs_secret["pkp-smtp-user"].secret_id
+    EMAIL_RELAY_SMTP_PASSWORD = google_secret_manager_secret.pkp_ojs_secret["pkp-smtp-pass"].secret_id
+  }
 }
 
 # ============================================================================
@@ -136,7 +151,7 @@ resource "null_resource" "pkp_ojs_container_build" {
     source_hash = sha256(join("", [
       for file in fileset(local.pkp_ojs_container_local_path, "**") :
       filesha256("${local.pkp_ojs_container_local_path}/${file}")
-    ], [
+      ], [
       for file in setunion(
         fileset(local.pkp_ojs_email_relay_path, "*.py"),
         fileset(local.pkp_ojs_email_relay_path, "*.ini"),
@@ -297,6 +312,28 @@ resource "google_cloud_run_v2_service" "icat_pkp_ojs_server" {
 
       dynamic "env" {
         for_each = local.pkp_ojs_env_secret_ids
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = env.value
+              version = "latest"
+            }
+          }
+        }
+      }
+
+      # Email relay configuration for enqueue.py / send_batch.py which runs inside this container
+      dynamic "env" {
+        for_each = local.email_relay_env_safe_values
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      dynamic "env" {
+        for_each = local.email_relay_env_secret_ids
         content {
           name = env.key
           value_source {
@@ -1013,34 +1050,28 @@ resource "google_cloud_run_v2_job" "icat_pkp_ojs_email_relay_migrate" {
   template {
     template {
       containers {
-        image   = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.source_hash}"
-        command = ["python3", "-m", "alembic", "upgrade", "head"]
+        image       = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.source_hash}"
+        command     = ["python3", "-m", "alembic", "upgrade", "head"]
         working_dir = "/opt/email-relay"
 
-        # Database connection
-        env {
-          name  = "DB_HOST"
-          value = "/cloudsql/${local.project_id}:${local.region}:pkp-ojs"
-        }
-        env {
-          name  = "DB_NAME"
-          value = google_sql_database.email_relay.name
-        }
-        env {
-          name = "DB_USER"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-db-user"].secret_id
-              version = "latest"
-            }
+        # Environment variables
+        dynamic "env" {
+          for_each = local.email_relay_env_safe_values
+          content {
+            name  = env.key
+            value = env.value
           }
         }
-        env {
-          name = "DB_PASSWORD"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-db-password"].secret_id
-              version = "latest"
+
+        dynamic "env" {
+          for_each = local.email_relay_env_secret_ids
+          content {
+            name = env.key
+            value_source {
+              secret_key_ref {
+                secret  = env.value
+                version = "latest"
+              }
             }
           }
         }
@@ -1095,58 +1126,24 @@ resource "google_cloud_run_v2_job" "icat_pkp_ojs_email_relay_test" {
         image   = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.source_hash}"
         command = ["python3", "/opt/email-relay/test_relay.py"]
 
-        # Database connection
-        env {
-          name  = "DB_HOST"
-          value = "/cloudsql/${local.project_id}:${local.region}:pkp-ojs"
-        }
-        env {
-          name  = "DB_NAME"
-          value = google_sql_database.email_relay.name
-        }
-        env {
-          name = "DB_USER"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-db-user"].secret_id
-              version = "latest"
-            }
-          }
-        }
-        env {
-          name = "DB_PASSWORD"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-db-password"].secret_id
-              version = "latest"
-            }
+        # Environment variables
+        dynamic "env" {
+          for_each = local.email_relay_env_safe_values
+          content {
+            name  = env.key
+            value = env.value
           }
         }
 
-        # SMTP connection (used by send_batch)
-        env {
-          name  = "SMTP_HOST"
-          value = "smtp-relay.gmail.com"
-        }
-        env {
-          name  = "SMTP_PORT"
-          value = "587"
-        }
-        env {
-          name = "SMTP_USER"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-smtp-user"].secret_id
-              version = "latest"
-            }
-          }
-        }
-        env {
-          name = "SMTP_PASSWORD"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-smtp-pass"].secret_id
-              version = "latest"
+        dynamic "env" {
+          for_each = local.email_relay_env_secret_ids
+          content {
+            name = env.key
+            value_source {
+              secret_key_ref {
+                secret  = env.value
+                version = "latest"
+              }
             }
           }
         }
@@ -1215,58 +1212,24 @@ resource "google_cloud_run_v2_job" "icat_pkp_ojs_email_send" {
         image   = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.source_hash}"
         command = ["python3", "/opt/email-relay/send_batch.py"]
 
-        # Database connection
-        env {
-          name  = "DB_HOST"
-          value = "/cloudsql/${local.project_id}:${local.region}:pkp-ojs"
-        }
-        env {
-          name  = "DB_NAME"
-          value = google_sql_database.email_relay.name
-        }
-        env {
-          name = "DB_USER"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-db-user"].secret_id
-              version = "latest"
-            }
-          }
-        }
-        env {
-          name = "DB_PASSWORD"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-db-password"].secret_id
-              version = "latest"
-            }
+        # Environment variables
+        dynamic "env" {
+          for_each = local.email_relay_env_safe_values
+          content {
+            name  = env.key
+            value = env.value
           }
         }
 
-        # SMTP connection
-        env {
-          name  = "SMTP_HOST"
-          value = "smtp-relay.gmail.com"
-        }
-        env {
-          name  = "SMTP_PORT"
-          value = "587"
-        }
-        env {
-          name = "SMTP_USER"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-smtp-user"].secret_id
-              version = "latest"
-            }
-          }
-        }
-        env {
-          name = "SMTP_PASSWORD"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-smtp-pass"].secret_id
-              version = "latest"
+        dynamic "env" {
+          for_each = local.email_relay_env_secret_ids
+          content {
+            name = env.key
+            value_source {
+              secret_key_ref {
+                secret  = env.value
+                version = "latest"
+              }
             }
           }
         }
@@ -1321,30 +1284,24 @@ resource "google_cloud_run_v2_job" "icat_pkp_ojs_email_prune" {
         image   = "${google_artifact_registry_repository.cloud_run_source_deploy.registry_uri}/icat-pkp-ojs:${null_resource.pkp_ojs_container_build.triggers.source_hash}"
         command = ["python3", "/opt/email-relay/prune_queue.py"]
 
-        # Database connection
-        env {
-          name  = "DB_HOST"
-          value = "/cloudsql/${local.project_id}:${local.region}:pkp-ojs"
-        }
-        env {
-          name  = "DB_NAME"
-          value = google_sql_database.email_relay.name
-        }
-        env {
-          name = "DB_USER"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-db-user"].secret_id
-              version = "latest"
-            }
+        # Environment variables
+        dynamic "env" {
+          for_each = local.email_relay_env_safe_values
+          content {
+            name  = env.key
+            value = env.value
           }
         }
-        env {
-          name = "DB_PASSWORD"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.pkp_ojs_secret["pkp-db-password"].secret_id
-              version = "latest"
+
+        dynamic "env" {
+          for_each = local.email_relay_env_secret_ids
+          content {
+            name = env.key
+            value_source {
+              secret_key_ref {
+                secret  = env.value
+                version = "latest"
+              }
             }
           }
         }

@@ -17,11 +17,11 @@ def send_batch():
     session = Session()
 
     # Get SMTP credentials
-    smtp_host = os.environ.get('SMTP_HOST', 'smtp-relay.gmail.com')
-    smtp_port = int(os.environ.get('SMTP_PORT', 587))
-    smtp_user = os.environ.get('SMTP_USER')
-    smtp_pass = os.environ.get('SMTP_PASSWORD')
-    smtp_local_hostname = os.environ.get('SMTP_LOCAL_HOSTNAME', 'conference-submissions.appropriatetech.net')
+    smtp_host = os.environ.get('EMAIL_RELAY_SMTP_HOST', 'smtp-relay.gmail.com')
+    smtp_port = int(os.environ.get('EMAIL_RELAY_SMTP_PORT', 587))
+    smtp_user = os.environ.get('EMAIL_RELAY_SMTP_USER')
+    smtp_pass = os.environ.get('EMAIL_RELAY_SMTP_PASSWORD')
+    smtp_local_hostname = os.environ.get('EMAIL_RELAY_SMTP_LOCAL_HOSTNAME', 'conference-submissions.appropriatetech.net')
 
     try:
         # Construct Select Statement

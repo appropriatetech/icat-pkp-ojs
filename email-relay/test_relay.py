@@ -7,8 +7,8 @@ Designed to run as a Cloud Run Job with detailed logging for verification.
 Required environment variables:
   TEST_SENDER     - email address to use as the sender
   TEST_RECIPIENT  - email address to use as the recipient
-  DB_HOST, DB_NAME, DB_USER, DB_PASSWORD - database connection
-  SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD - SMTP connection
+  EMAIL_RELAY_DB_HOST, EMAIL_RELAY_DB_NAME, EMAIL_RELAY_DB_USER, EMAIL_RELAY_DB_PASSWORD - database connection
+  EMAIL_RELAY_SMTP_HOST, EMAIL_RELAY_SMTP_PORT, EMAIL_RELAY_SMTP_USER, EMAIL_RELAY_SMTP_PASSWORD - SMTP connection
 """
 
 import contextlib

@@ -40,11 +40,11 @@ sendmail_path = "python3 /opt/email-relay/enqueue.py"
 
 | Variable | Default | Description |
 |---|---|---|
-| `DB_USER` | `ojs` | MySQL username |
-| `DB_PASSWORD` | `ojs` | MySQL password |
-| `DB_HOST` | `localhost` | MySQL host or Unix socket path (e.g., `/cloudsql/project:region:instance`) |
-| `DB_PORT` | `3306` | MySQL port (ignored when `DB_HOST` is a socket) |
-| `DB_NAME` | `email_relay` | MySQL database name |
+| `EMAIL_RELAY_DB_USER` | `ojs` | MySQL username |
+| `EMAIL_RELAY_DB_PASSWORD` | `ojs` | MySQL password |
+| `EMAIL_RELAY_DB_HOST` | `localhost` | MySQL host or Unix socket path (e.g., `/cloudsql/project:region:instance`) |
+| `EMAIL_RELAY_DB_PORT` | `3306` | MySQL port (ignored when `EMAIL_RELAY_DB_HOST` is a socket) |
+| `EMAIL_RELAY_DB_NAME` | `email_relay` | MySQL database name |
 
 ### `send_batch.py`
 
@@ -54,10 +54,10 @@ Fetches up to `BATCH_SIZE` (10) pending emails from the queue, connects to the S
 
 | Variable | Default | Description |
 |---|---|---|
-| `SMTP_HOST` | `smtp-relay.gmail.com` | SMTP server hostname |
-| `SMTP_PORT` | `587` | SMTP server port |
-| `SMTP_USER` | *(none)* | SMTP username |
-| `SMTP_PASSWORD` | *(none)* | SMTP password |
+| `EMAIL_RELAY_SMTP_HOST` | `smtp-relay.gmail.com` | SMTP server hostname |
+| `EMAIL_RELAY_SMTP_PORT` | `587` | SMTP server port |
+| `EMAIL_RELAY_SMTP_USER` | *(none)* | SMTP username |
+| `EMAIL_RELAY_SMTP_PASSWORD` | *(none)* | SMTP password |
 | `BATCH_SIZE` | `10` | Max emails per batch |
 | `MAX_ATTEMPTS` | `3` | Max retry attempts before marking as `failed` |
 
@@ -71,7 +71,7 @@ Removes old entries from the queue:
 
 Shared module providing the SQLAlchemy `MetaData`, `email_queue` table definition, and connection helpers (`get_engine()`, `get_session()`).
 
-Supports both TCP connections (`DB_HOST=hostname`) and Cloud SQL Unix sockets (`DB_HOST=/cloudsql/project:region:instance`).
+Supports both TCP connections (`EMAIL_RELAY_DB_HOST=hostname`) and Cloud SQL Unix sockets (`EMAIL_RELAY_DB_HOST=/cloudsql/project:region:instance`).
 
 ## Database
 
