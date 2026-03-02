@@ -294,17 +294,20 @@ allowed_title_html = "b,i,u,sup,sub"
 ; Email Settings ;
 ;;;;;;;;;;;;;;;;;;
 
+; NOTE: We are using a custom sendmail wrapper to enqueue emails for batch processing.
+; See ../inat-pkp-ojs/email-relay/README.md
+
 [email]
 
 ; Default method to send emails
-; Available options: sendmail, smtp, log, phpmailer
-; Use 'smtp' to send via SMTP server (recommended for Cloud Run)
+; Use 'sendmail' to send via the sendmail_path wrapper (enqueue.py)
+; Use 'smtp' to send via SMTP server directly
 ; Use 'log' to log emails to files instead of sending (for debugging)
-default = smtp
+default = sendmail
 
 ; Path to the sendmail, -bs argument is for using SMTP protocol
 ; Not used when default = smtp
-; sendmail_path = "/usr/sbin/sendmail -bs"
+sendmail_path = "/opt/email-relay/enqueue.py -bs"
 
 ; Use SMTP for sending mail instead of mail()
 smtp = On
