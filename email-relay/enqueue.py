@@ -1,8 +1,9 @@
 import sys
-import email
-import argparse
-from email.policy import default
+import click
 import database
+import email
+from email.policy import default
+import send_batch
 
 def enqueue_email(raw_email, args_sender=None, args_recipients=None):
     # Parse the email
@@ -49,7 +50,12 @@ def enqueue_email(raw_email, args_sender=None, args_recipients=None):
     finally:
         session.close()
 
-import click
+    # Immediately attempt to send the batch
+    try:
+        send_batch.send_batch()
+    except Exception as e:
+        print(f"Error during immediate send_batch trigger: {e}", file=sys.stderr)
+
 
 @click.command(context_settings={"ignore_unknown_options": True})
 @click.option('-f', 'args_sender', default=None, help="Sender override")
