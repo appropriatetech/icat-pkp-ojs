@@ -305,9 +305,10 @@ allowed_title_html = "b,i,u,sup,sub"
 ; Use 'log' to log emails to files instead of sending (for debugging)
 default = sendmail
 
-; Path to the sendmail, -bs argument is for using SMTP protocol
-; Not used when default = smtp
-sendmail_path = "/opt/email-relay/enqueue.py -bs"
+; Path to the sendmail wrapper
+; -t tells Symfony to pipe the raw message to stdin (not use SMTP protocol)
+; -oi prevents a line with only "." from being treated as end-of-message
+sendmail_path = "python3 /opt/email-relay/enqueue.py -t -oi"
 
 ; Use SMTP for sending mail instead of mail()
 smtp = On
