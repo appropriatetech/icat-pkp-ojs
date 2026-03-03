@@ -1,18 +1,20 @@
 # Email Relay
 
-A store-and-forward email relay for OJS. Instead of sending emails directly via SMTP (which frequently fails due to Gmail rate limiting), OJS hands emails to an **enqueue** script that stores them in a MySQL database. A separate **send_batch** job sends them in controlled batches, with automatic retries. A **prune_queue** job cleans up old entries.
+A store-and-forward email relay for OJS. Instead of sending emails directly via SMTP (which frequently fails due to Gmail rate limiting), OJS hands emails to an **enqueue** script that stores them in a MySQL database. The enqueue script immediately attempts to send via `send_batch()`. A separate scheduled **send_batch** job acts as a safety net for any emails not sent inline. A **prune_queue** job cleans up old entries.
 
 ## Architecture
 
 ```
 ┌─────────┐    sendmail_path     ┌────────────┐      MySQL       ┌──────────────┐
 │   OJS   │ ──────────────────── │ enqueue.py │ ───────────────► │ email_queue  │
-│ (PHP)   │                      └────────────┘                  │   table      │
-└─────────┘                                                      └──────┬───────┘
-                                                                        │
+│ (PHP)   │                      └─────┬──────┘                  │   table      │
+└─────────┘                            │                         └──────┬───────┘
+                                       │ calls send_batch()             │
+                                       │ immediately                    │
+                                       ▼                                │
                      ┌──────────────────┐     SMTP                      │
                      │ smtp-relay.      │ ◄──────────── ┌───────────────┤
-                     │ gmail.com:587    │               │ send_batch.py │ (Cloud Run Job, every 5 min)
+                     │ gmail.com:587    │               │ send_batch.py │ (also Cloud Run Job, every 5 min)
                      └──────────────────┘               └───────────────┘
                                                                         │
                                                         ┌───────────────┤
@@ -24,17 +26,15 @@ A store-and-forward email relay for OJS. Instead of sending emails directly via 
 
 ### `enqueue.py`
 
-Called by OJS as a `sendmail` replacement. Reads a raw RFC 822 email message from stdin, extracts the sender and recipients from the headers, and inserts a row into the `email_queue` table with status `pending`.
+Called by OJS as a `sendmail` replacement. Reads a raw RFC 822 email message from stdin, extracts the sender and recipients from the headers, inserts a row into the `email_queue` table with status `pending`, and **immediately calls `send_batch()`** to attempt delivery without waiting for the scheduled job.
 
 **Usage in OJS `config.inc.php`:**
 
 ```ini
 [email]
 default = sendmail
-sendmail_path = "python3 /opt/email-relay/enqueue.py"
+sendmail_path = "python3 /opt/email-relay/enqueue.py -t -oi"
 ```
-
-> **Note:** This configuration is not yet active. Currently OJS uses `default = smtp` and sends directly. Once the relay is tested, the config will be switched.
 
 **Environment variables:**
 
@@ -48,9 +48,11 @@ sendmail_path = "python3 /opt/email-relay/enqueue.py"
 
 ### `send_batch.py`
 
-Fetches up to `BATCH_SIZE` (10) pending emails from the queue, connects to the SMTP server, and sends them one at a time. Updates each row's status to `sent` on success, or increments `attempt_count` on failure. After `MAX_ATTEMPTS` (3) failures, the status is set to `failed`.
+Fetches up to `BATCH_SIZE` (default 10) pending emails from the queue, connects to the SMTP server, and sends them one at a time. Updates each row's status to `sent` on success, or increments `attempt_count` on failure. After `MAX_ATTEMPTS` (default 3) failures, the status is set to `failed`.
 
-**Environment variables** (in addition to `DB_*` above):
+This runs both inline (called by `enqueue.py` immediately after queuing) and as a scheduled Cloud Run Job every 5 minutes as a safety net.
+
+**Environment variables** (in addition to `EMAIL_RELAY_DB_*` above):
 
 | Variable | Default | Description |
 |---|---|---|
@@ -60,6 +62,7 @@ Fetches up to `BATCH_SIZE` (10) pending emails from the queue, connects to the S
 | `EMAIL_RELAY_SMTP_PASSWORD` | *(none)* | SMTP password |
 | `BATCH_SIZE` | `10` | Max emails per batch |
 | `MAX_ATTEMPTS` | `3` | Max retry attempts before marking as `failed` |
+| `EMAIL_RELAY_SMTP_LOCAL_HOSTNAME` | *(auto)* | EHLO hostname override |
 
 ### `prune_queue.py`
 
@@ -72,6 +75,10 @@ Removes old entries from the queue:
 Shared module providing the SQLAlchemy `MetaData`, `email_queue` table definition, and connection helpers (`get_engine()`, `get_session()`).
 
 Supports both TCP connections (`EMAIL_RELAY_DB_HOST=hostname`) and Cloud SQL Unix sockets (`EMAIL_RELAY_DB_HOST=/cloudsql/project:region:instance`).
+
+### `subprocess_logging.py`
+
+Shared logging configuration. When running as a Cloud Run job (Python is PID 1), logs go to stderr normally. When running as a subprocess inside the OJS container (invoked by Symfony's `proc_open`), logs are routed to `/proc/1/fd/2` (the container entrypoint's stderr) to reach Cloud Logging.
 
 ## Database
 
@@ -131,7 +138,7 @@ The relay runs on Google Cloud Run as two scheduled jobs:
 
 | Job | Schedule | Purpose |
 |---|---|---|
-| `icat-pkp-ojs-email-send` | Every 5 minutes | Send pending emails |
+| `icat-pkp-ojs-email-send` | Every 5 minutes | Send pending emails (safety net) |
 | `icat-pkp-ojs-email-prune` | Hourly | Clean up old queue entries |
 
 Both jobs are defined in Terraform (`tf/prod/main.tf`) and triggered by Cloud Scheduler.
@@ -141,15 +148,8 @@ Both jobs are defined in Terraform (`tf/prod/main.tf`) and triggered by Cloud Sc
 ```bash
 cd email-relay
 python3 -m venv .venv
-.venv/bin/pip install pytest sqlalchemy
+.venv/bin/pip install pytest sqlalchemy click
 .venv/bin/pytest tests/ -v
 ```
 
 Tests use SQLite in-memory and mock SMTP to test enqueue, send (success/failure/retry), and prune logic.
-
-## Rollout Plan
-
-1. Deploy the Cloud Run Jobs and Scheduler triggers (Terraform)
-2. Run Alembic migration to create the `email_queue` table
-3. Test by manually inserting a test email and running the send job
-4. Once verified, switch OJS config from `default = smtp` to `default = sendmail` with `sendmail_path` pointing to `enqueue.py`

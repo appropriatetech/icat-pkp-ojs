@@ -217,8 +217,17 @@ gcloud logging read "resource.type=cloud_run_revision AND resource.labels.servic
 
 ### Check Apache Error Logs
 
+Apache logs are written to GCS, and can be accessed directly:
+
 ```bash
 gcloud storage cat gs://icat-pkp-ojs-logs/error.log | tail -20
+```
+
+Alternatively, you can retrieve logs from Cloud Logging:
+
+```bash
+gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=icat-pkp-ojs" \
+  --limit=50 --format="value(timestamp, textPayload)"
 ```
 
 ### Access Database Directly
