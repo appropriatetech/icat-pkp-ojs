@@ -3,7 +3,11 @@ import click
 import database
 import email
 from email.policy import default
+import subprocess_logging as log
 import send_batch
+
+log.setup_logging()
+logger = log.get_logger(__name__)
 
 def enqueue_email(raw_email, args_sender=None, args_recipients=None):
     # Parse the email
@@ -23,7 +27,7 @@ def enqueue_email(raw_email, args_sender=None, args_recipients=None):
 
     # Validation: if no recipients found, we can't send
     if not recipients:
-        print("No recipients found in arguments or headers.", file=sys.stderr)
+        logger.warning("No recipients found in arguments or headers.")
         # Sendmail might exit 0 or error here, but for our relay we should probably accept it or warn.
         # But if we insert with empty recipients, send_batch might fail.
         # Let's insert anyway, send_batch will just skip or fail.
@@ -43,9 +47,9 @@ def enqueue_email(raw_email, args_sender=None, args_recipients=None):
         )
         session.execute(stmt)
         session.commit()
-    except Exception as e:
+    except Exception:
         session.rollback()
-        print(f"Error enqueuing email: {e}", file=sys.stderr)
+        logger.exception("Error enqueuing email")
         sys.exit(1)
     finally:
         session.close()
@@ -53,8 +57,8 @@ def enqueue_email(raw_email, args_sender=None, args_recipients=None):
     # Immediately attempt to send the batch
     try:
         send_batch.send_batch()
-    except Exception as e:
-        print(f"Error during immediate send_batch trigger: {e}", file=sys.stderr)
+    except Exception:
+        logger.exception("Error during immediate send_batch trigger")
 
 
 @click.command(context_settings={"ignore_unknown_options": True})
@@ -71,8 +75,8 @@ def main(args_sender, args):
         raw_content = sys.stdin.buffer.read()
         if raw_content:
             enqueue_email(raw_content, args_sender, args_recipients)
-    except Exception as e:
-        print(f"Critical error reading input: {e}", file=sys.stderr)
+    except Exception:
+        logger.exception("Critical error reading input")
         sys.exit(1)
 
 if __name__ == "__main__":

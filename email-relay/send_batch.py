@@ -1,12 +1,12 @@
 import os
 import smtplib
-import logging
 from sqlalchemy import select, update, func, case
 import database
+import subprocess_logging as log
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+log.setup_logging()
+logger = log.get_logger(__name__)
 
 BATCH_SIZE = 10
 MAX_ATTEMPTS = 3

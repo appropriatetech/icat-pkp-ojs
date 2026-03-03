@@ -13,7 +13,6 @@ Required environment variables:
 
 import contextlib
 import datetime
-import logging
 import os
 import subprocess
 import sys
@@ -21,14 +20,12 @@ import sys
 from sqlalchemy import select, delete
 
 import database
+import subprocess_logging as log
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-)
-logger = logging.getLogger(__name__)
+log.setup_logging()
+logger = log.get_logger(__name__)
 
 
 def times_within(t1, t2, threshold_seconds=30):
