@@ -211,6 +211,8 @@ To upgrade OJS (e.g., from 3.3 to 3.5):
    curl -I https://conference-submissions.appropriatetech.net
    ```
 
+7. **Document** any post-upgrade steps below in the **Past Upgrade Notes** section.
+
 For an example of detailed rollback instructions, see `ROLLBACK_3.5_3.3.md`.
 
 ### Past Upgrade Notes
