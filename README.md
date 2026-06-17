@@ -62,7 +62,7 @@ This will:
 Configuration is managed in `tf/prod/main.tf`:
 
 - **Environment variables**: Edit `locals.pkp_ojs_env_safe_values`
-- **OJS version**: Change `PKP_VERSION` (e.g., `"3_5_0-2"`)
+- **OJS version**: Change `PKP_VERSION` (e.g., `"3_5_0-4"`)
 - **Domain settings**: Update `BASE_URL` and `SERVERNAME`
 - **Config files**: Edit files in `tf/prod/config/` (copy from the template config.inc.php in the new version, and merge your settings)
 
@@ -163,27 +163,34 @@ gcloud run jobs execute icat-pkp-ojs-automate-revisions --region=us-central1 --w
 
 The currently used version of OJS is specified in `tf/prod/main.tf` under the `PKP_VERSION` variable.
 
-> **NOTE Version 3.5.0-2 has a bug in the reviewer search -- see <https://github.com/pkp/pkp-lib/issues/12100#issuecomment-3614365262>; this we have patched this bug in our custom container image. If updating from version 3.5.0-2, check whether this patch is necessary any longer.**
-
 To upgrade OJS (e.g., from 3.3 to 3.5):
 
 1. **Backup the database**:
 
    ```bash
-   gcloud sql export sql pkp-ojs gs://icat-pkp-ojs-manualbackup/backup-$(date +%Y%m%d-%H%M%S).sql \
+   gcloud sql export sql pkp-ojs gs://icat-pkp-ojs-manualdbbackups/backup-$(date +%Y%m%d-%H%M%S).sql \
      --database=icat
    ```
+
+   > Note: The Cloud SQL instance's service account needs to be granted the Storage Object User role on the backup bucket. If that's not already done, you can get the service account email with:
+   > ```bash
+   > gcloud sql instances describe pkp-ojs --format="value(serviceAccountEmailAddress)"
+   > ```
+   > and then grant the role with:
+   > ```bash
+   > gcloud storage buckets add-iam-policy-binding gs://icat-pkp-ojs-manualdbbackups --member="serviceAccount:<service-account-email>" --role="roles/storage.objectUser"
+   > ```
 
 2. **Backup private files** (if needed):
 
    ```bash
-   gcloud storage rsync -r gs://icat-pkp-ojs-private gs://backup-bucket/private-backup-$(date +%Y%m%d)
+   gcloud storage rsync -r gs://icat-pkp-ojs-private gs://icat-pkp-ojs-manualfilesbackups/private-backup-$(date +%Y%m%d)
    ```
 
 3. **Update the version** in `tf/prod/main.tf`:
 
    ```hcl
-   PKP_VERSION = "3_5_0-2"
+   PKP_VERSION = "3_5_0-4"
    ```
 
 4. **Apply the changes**:
@@ -205,6 +212,12 @@ To upgrade OJS (e.g., from 3.3 to 3.5):
    ```
 
 For an example of detailed rollback instructions, see `ROLLBACK_3.5_3.3.md`.
+
+### Past Upgrade Notes
+
+#### 3.5.0-2 to 3.5.0-4
+
+The [reviewer search bug](https://github.com/pkp/pkp-lib/issues/12100#issuecomment-3614365262) is resolved as of release 3.5.0-3. We manually patched OJS in commit [appropriatetech/pkp-containers@8cfd1d4](https://github.com/appropriatetech/pkp-containers/commit/8cfd1d423083e6d25cdd64535167c040a6f7029c).
 
 ## Troubleshooting
 

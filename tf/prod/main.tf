@@ -15,8 +15,8 @@ locals {
   pkp_ojs_env_safe_values = {
 
     PKP_TOOL    = "ojs" # Tool to run or build. Options: ojs, omp, ops
-    PKP_VERSION = "3_5_0-2"
-    WEB_SERVER  = "php:8.2-apache"
+    PKP_VERSION = "3_5_0-4"
+    WEB_SERVER  = "php:8.3-apache"
 
     ### Journal / Project Settings --------------------------------------------------
     COMPOSE_PROJECT_NAME        = "ojs"
