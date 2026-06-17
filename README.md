@@ -219,6 +219,8 @@ For an example of detailed rollback instructions, see `ROLLBACK_3.5_3.3.md`.
 
 The [reviewer search bug](https://github.com/pkp/pkp-lib/issues/12100#issuecomment-3614365262) is resolved as of release 3.5.0-3. We manually patched OJS in commit [appropriatetech/pkp-containers@8cfd1d4](https://github.com/appropriatetech/pkp-containers/commit/8cfd1d423083e6d25cdd64535167c040a6f7029c).
 
+Additionally, after upgrading to 3.5.0-4, we resolved an issue where authors received an "Access Denied" error when uploading revisions. This occurred because some submissions had manually been moved to new external review rounds in version 3.5.0-2 without recording a qualifying editorial decision (see [pkp/pkp-lib issue #11123](https://github.com/pkp/pkp-lib/issues/11123)). We fixed this by running a custom CLI script (`automateMissingRevisions.php`) as a one-off Cloud Run job to backfill the missing `PENDING_REVISIONS` decisions for the affected submissions.
+
 ## Troubleshooting
 
 ### Check Service Logs
